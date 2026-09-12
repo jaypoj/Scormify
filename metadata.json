@@ -1,0 +1,6 @@
+{
+  "name": "SCORM → Workday Repair Tool",
+  "description": "Deterministic browser-based remediation for legacy SCORM course packages transitioning to Workday Learning. All ZIP inspection, patching, and validation runs locally in your browser.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
