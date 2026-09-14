@@ -9,6 +9,7 @@ import {
   normalizeFinalNextPageCompletion,
   repairCompactFinishCompletion,
 } from './codeTransformer';
+import { ensurePageContentManifestEntry } from './issue1StatefulRuntime';
 
 export interface PatchResult {
   updatedContents: { [filePath: string]: string };
@@ -608,6 +609,25 @@ export function patchStatefulCompactWorkdayPackage(
     logs.push(`WORKDAY INLINE PAGE COMPATIBILITY: Generated ${pageContentPath} bundling ${pageMapResult.pageCount} page(s)`);
     if (pageMapResult.unsafeScriptsDetected) {
       logs.push(`WARNING: Unsafe inline scripts detected in pages: ${pageMapResult.unsafeScriptDetails}`);
+    }
+  }
+
+  // 3b. Ensure generated page-content.js is declared in the active SCORM resource.
+  if (pageMapResult.pageCount > 0 && updatedContents['imsmanifest.xml']) {
+    const originalManifest = updatedContents['imsmanifest.xml'];
+    const manifestResult = ensurePageContentManifestEntry(originalManifest);
+    if (manifestResult.modified) {
+      updatedContents['imsmanifest.xml'] = manifestResult.xml;
+      if (!filesModified.includes('imsmanifest.xml')) filesModified.push('imsmanifest.xml');
+      replacementsAttempted++;
+      replacementsApplied++;
+      codeChanges.push({
+        filePath: 'imsmanifest.xml',
+        description: 'Added scripts/page-content.js to the SCORM resource file list',
+        beforeSnippet: originalManifest.slice(0, 300),
+        afterSnippet: manifestResult.xml.slice(0, 300),
+      });
+      logs.push('Added scripts/page-content.js to imsmanifest.xml resource dependencies');
     }
   }
 

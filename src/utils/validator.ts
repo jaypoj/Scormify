@@ -1,6 +1,7 @@
 import { ValidationItem, PackageInspectionResult } from '../types';
 import { parseImsManifest } from './manifest';
 import { findFunctionBlock } from './braceScanner';
+import { validateIssue1StatefulRuntime } from './issue1StatefulRuntime';
 
 export interface ValidationInput {
   originalPackage: PackageInspectionResult;
@@ -111,9 +112,14 @@ export function validatePatchedPackage(input: ValidationInput): {
   });
 
   // 7. Approved file extensions
-  const unapprovedModifications = filesModified.filter(
-    (f) => !f.endsWith('.js') && !f.endsWith('.html') && !f.endsWith('.htm')
-  );
+  const unapprovedModifications = filesModified.filter((f) => {
+    const lower = f.toLowerCase();
+    const approvedRuntime = lower.endsWith('.js') || lower.endsWith('.html') || lower.endsWith('.htm');
+    const approvedStatefulManifest =
+      originalPackage.repairProfile === 'KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1' &&
+      lower === 'imsmanifest.xml';
+    return !approvedRuntime && !approvedStatefulManifest;
+  });
   checks.push({
     id: 7,
     title: 'Only approved runtime scripts were modified',
@@ -163,16 +169,29 @@ export function validatePatchedPackage(input: ValidationInput): {
     details: profileTargetDetail,
   });
 
-  // 9. Pass threshold 80 preserved
-  let quizThreshold80 = true;
+  // 9. Pass threshold 80 preserved — inspect actual effective assessment source.
   const assessmentFile = originalPackage.assessmentFiles?.[0]?.replace(/^\[[^\]]+\]\s*/, '') || 'scripts/navigation.js';
+  const thresholdSources = Object.entries(updatedFilesMap)
+    .filter(([f]) => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.htm'))
+    .map(([f, content]) => ({ f, content }));
+  let quizThreshold80 = false;
+  let thresholdEvidenceFile = assessmentFile;
+  for (const source of thresholdSources) {
+    if (/(?:__bestScore|bestScore|score|numericScore)\s*>=\s*80\b/i.test(source.content) && /passed|failed/i.test(source.content)) {
+      quizThreshold80 = true;
+      thresholdEvidenceFile = source.f;
+      break;
+    }
+  }
   checks.push({
     id: 9,
     title: 'Quiz passing threshold remains 80%',
     ruleName: 'Pass threshold 80 preserved',
-    file: assessmentFile,
+    file: thresholdEvidenceFile,
     passed: quizThreshold80,
-    details: 'PASS — quiz threshold remains 80%',
+    details: quizThreshold80
+      ? 'PASS — effective assessment source explicitly applies an 80% passing threshold'
+      : 'FAIL — effective assessment source does not prove an 80% passing threshold',
   });
 
   // 10. Raw score reporting intact
@@ -1315,6 +1334,10 @@ export function validatePatchedPackage(input: ValidationInput): {
         ? 'PASS — Learner UX enhancements preserve all core SCORM 1.2 score, pass/fail, and state restoration rules'
         : 'FAIL — SCORM state invariants compromised by UX additions',
     });
+  }
+
+  if (originalPackage.repairProfile === 'KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1') {
+    checks.push(...validateIssue1StatefulRuntime(updatedFilesMap, zipFileList));
   }
 
   for (const c of checks) {

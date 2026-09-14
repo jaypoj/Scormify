@@ -14,6 +14,7 @@ import { validatePatchedPackage } from './validator';
 import { analyzeStatusWritesAndDefects, analyzeStatefulWorkdayFindings } from './statusInventory';
 import { normalizeFinalNextPageCompletion, repairCompactFinishCompletion } from './codeTransformer';
 import { findFunctionBlock } from './braceScanner';
+import { verifyFinalZipIntegrity, FinalZipIntegrityResult } from './issue1StatefulRuntime';
 
 export interface ProgressCallback {
   (current: number, total: number, fileName: string, currentStatus: string): void;
@@ -747,6 +748,12 @@ export async function patchSinglePackage(
     compressionOptions: { level: 6 },
   });
 
+  let issue1ZipIntegrity: FinalZipIntegrityResult | null = null;
+  if (pkg.repairProfile === 'KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1') {
+    onStatusUpdate?.('Reopening final ZIP for integrity verification...');
+    issue1ZipIntegrity = await verifyFinalZipIntegrity(zip, patchedBlob, true);
+  }
+
   onStatusUpdate?.('Calculating repaired package SHA-256...');
   const patchedSha256 = await calculateSha256(patchedBlob);
 
@@ -795,6 +802,17 @@ export async function patchSinglePackage(
     recreatedZipBlob: patchedBlob,
   });
 
+  if (issue1ZipIntegrity) {
+    validation.checks.push({
+      id: 98,
+      title: 'FINAL ZIP REOPEN / BINARY INTEGRITY',
+      ruleName: 'Final ZIP Integrity',
+      file: 'Recreated ZIP',
+      passed: issue1ZipIntegrity.passed,
+      details: issue1ZipIntegrity.details,
+    });
+  }
+
   // Add the passing invariant check
   validation.checks.push({
     id: 99,
@@ -807,6 +825,7 @@ export async function patchSinglePackage(
 
   const validationPassed =
     validation.allPassed &&
+    (!issue1ZipIntegrity || issue1ZipIntegrity.passed) &&
     !targetDefectsRemaining &&
     !statefulDefectsRemaining &&
     !postScan.finishDefect.detected;

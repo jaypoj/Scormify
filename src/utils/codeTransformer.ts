@@ -4,6 +4,7 @@
  */
 
 import { findBalancedBlock, findEventListeners, findFunctionBlock } from './braceScanner';
+import { hardenStatefulRuntimeCode } from './issue1StatefulRuntime';
 
 export interface TransformResult {
   code: string;
@@ -1642,6 +1643,17 @@ function saveAndExitCourse() {
     code = finFinalSafeguard.code;
     modified = true;
     changes.push(...finFinalSafeguard.changes);
+  }
+
+  // ISSUE #1 FINAL RUNTIME HARDENING
+  // Run after every legacy/stateful transformation so all callers — including tests,
+  // patcher, and real package generation — receive the same effective runtime code.
+  const issue1Runtime = hardenStatefulRuntimeCode(code, courseId);
+  code = issue1Runtime.code;
+  if (issue1Runtime.modified) {
+    modified = true;
+    changes.push(...issue1Runtime.changes);
+    audits.push(...issue1Runtime.audits);
   }
 
   // Final sanity check: verify JavaScript syntax
