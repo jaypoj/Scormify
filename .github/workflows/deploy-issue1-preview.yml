@@ -1,9 +1,9 @@
-name: Deploy Issue 1 Preview to GitHub Pages
+name: Deploy Retake and Threshold Preview to GitHub Pages
 
 on:
   push:
     branches:
-      - fix/stateful-runtime-issue-1
+      - fix/retake-and-legacy-universal
   workflow_dispatch:
 
 permissions:
@@ -33,8 +33,11 @@ jobs:
       - name: Type check
         run: bun run lint
 
-      - name: Run tests
+      - name: Existing regression suites
         run: bun run test
+
+      - name: Retake and threshold regression suite
+        run: bunx tsx test-retake-threshold.ts
 
       - name: Build
         run: bun run build
