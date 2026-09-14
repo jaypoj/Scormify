@@ -2,6 +2,7 @@ import { ValidationItem, PackageInspectionResult } from '../types';
 import { parseImsManifest } from './manifest';
 import { findFunctionBlock } from './braceScanner';
 import { validateIssue1StatefulRuntime } from './issue1StatefulRuntime';
+import { findThreshold80Evidence } from './legacyUniversalWorkday';
 
 export interface ValidationInput {
   originalPackage: PackageInspectionResult;
@@ -169,29 +170,16 @@ export function validatePatchedPackage(input: ValidationInput): {
     details: profileTargetDetail,
   });
 
-  // 9. Pass threshold 80 preserved — inspect actual effective assessment source.
+  // 9. Pass threshold 80 preserved — resolve direct and simple indirect threshold references.
   const assessmentFile = originalPackage.assessmentFiles?.[0]?.replace(/^\[[^\]]+\]\s*/, '') || 'scripts/navigation.js';
-  const thresholdSources = Object.entries(updatedFilesMap)
-    .filter(([f]) => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.htm'))
-    .map(([f, content]) => ({ f, content }));
-  let quizThreshold80 = false;
-  let thresholdEvidenceFile = assessmentFile;
-  for (const source of thresholdSources) {
-    if (/(?:__bestScore|bestScore|score|numericScore)\s*>=\s*80\b/i.test(source.content) && /passed|failed/i.test(source.content)) {
-      quizThreshold80 = true;
-      thresholdEvidenceFile = source.f;
-      break;
-    }
-  }
+  const thresholdEvidence = findThreshold80Evidence(updatedFilesMap, assessmentFile);
   checks.push({
     id: 9,
     title: 'Quiz passing threshold remains 80%',
     ruleName: 'Pass threshold 80 preserved',
-    file: thresholdEvidenceFile,
-    passed: quizThreshold80,
-    details: quizThreshold80
-      ? 'PASS — effective assessment source explicitly applies an 80% passing threshold'
-      : 'FAIL — effective assessment source does not prove an 80% passing threshold',
+    file: thresholdEvidence.file,
+    passed: thresholdEvidence.passed,
+    details: thresholdEvidence.details,
   });
 
   // 10. Raw score reporting intact

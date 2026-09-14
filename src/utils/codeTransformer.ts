@@ -1576,11 +1576,24 @@ function showAssessmentModal(currentScore, bestScore, finalStatus) {
       modal.remove();
       if (typeof resetAssessmentUI === 'function') {
         resetAssessmentUI();
-      } else {
-        var inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
-        for (var i = 0; i < inputs.length; i++) {
-          inputs[i].checked = false;
-        }
+      }
+      var inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+      for (var i = 0; i < inputs.length; i++) {
+        inputs[i].checked = false;
+      }
+      var feedbacks = document.querySelectorAll('.assessment-card .feedback, .question .feedback, [id*="assessment-feedback"]');
+      for (var f = 0; f < feedbacks.length; f++) {
+        feedbacks[f].textContent = '';
+        if (feedbacks[f].classList) feedbacks[f].classList.remove('correct', 'incorrect', 'pass', 'fail', 'error', 'success');
+      }
+      var assessmentResult = document.getElementById('assessment-result');
+      if (assessmentResult) {
+        assessmentResult.textContent = '';
+        assessmentResult.className = 'assessment-result';
+      }
+      var markedOptions = document.querySelectorAll('.correct-answer, .incorrect-answer, .option.correct, .option.incorrect');
+      for (var m = 0; m < markedOptions.length; m++) {
+        if (markedOptions[m].classList) markedOptions[m].classList.remove('correct-answer', 'incorrect-answer', 'correct', 'incorrect');
       }
     });
   }
