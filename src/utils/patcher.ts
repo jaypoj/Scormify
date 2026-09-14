@@ -10,6 +10,7 @@ import {
   repairCompactFinishCompletion,
 } from './codeTransformer';
 import { ensurePageContentManifestEntry } from './issue1StatefulRuntime';
+import { hardenUniversalAssessmentRuntime } from './universalPassPreservation';
 
 export interface PatchResult {
   updatedContents: { [filePath: string]: string };
@@ -309,6 +310,49 @@ export function patchUniversalScorm12Package(
       }
     } catch (err: any) {
       logs.push(`Error transforming Universal SCORM API ${filePath}: ${err.message}`);
+    }
+  }
+
+  // Universal assessment runtime hardening: preserve prior passed state and best LMS score across retakes.
+  const assessmentFilesToScan = openedFiles.filter((f) => {
+    const content = updatedContents[f];
+    return Boolean(content && (content.includes('submitAssessment') || (content.includes('assessmentData') && content.includes('SafeSCORM'))));
+  });
+
+  for (const filePath of assessmentFilesToScan) {
+    const original = updatedContents[filePath];
+    if (!original) continue;
+
+    patternsSearched += 1;
+    const result = hardenUniversalAssessmentRuntime(original);
+    for (const a of result.audits) {
+      audits.push({
+        filePath,
+        patternExpected: a.patternExpected,
+        matchFound: a.matchFound,
+        replacementApplied: a.replacementApplied,
+        contentChanged: a.replacementApplied,
+        reason: a.reason,
+      });
+      if (a.matchFound) patternsMatched++;
+      if (a.replacementApplied) {
+        replacementsAttempted++;
+        replacementsApplied++;
+      }
+    }
+
+    if (result.modified && result.code !== original) {
+      updatedContents[filePath] = result.code;
+      if (!filesModified.includes(filePath)) filesModified.push(filePath);
+      for (const desc of result.changes) {
+        codeChanges.push({
+          filePath,
+          description: desc,
+          beforeSnippet: original.slice(0, 300),
+          afterSnippet: result.code.slice(0, 300),
+        });
+      }
+      logs.push(`Applied Universal assessment pass-preservation remediation to ${filePath}: ${result.changes.join('; ')}`);
     }
   }
 

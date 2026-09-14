@@ -3,6 +3,7 @@ import { parseImsManifest } from './manifest';
 import { findFunctionBlock } from './braceScanner';
 import { validateIssue1StatefulRuntime } from './issue1StatefulRuntime';
 import { findThreshold80Evidence } from './legacyUniversalWorkday';
+import { validateUniversalPassPreservation } from './universalPassPreservation';
 
 export interface ValidationInput {
   originalPackage: PackageInspectionResult;
@@ -497,6 +498,19 @@ export function validatePatchedPackage(input: ValidationInput): {
       ? 'PASS — final-page / Finish message reads cmi.core.lesson_status and requires "passed" before displaying "Course complete"'
       : `FAIL — unconditional showAlert('Course complete') remains in the final-page/Finish branch in ${alertDefectFile}`,
   });
+
+  // Universal-only runtime invariant: a later lower retake may not downgrade a prior pass or best score.
+  if (originalPackage.repairProfile === 'KNOWN_SCORM12_UNIVERSAL_QUIZ_80_V1') {
+    const universalPassCheck = validateUniversalPassPreservation(updatedFilesMap);
+    checks.push({
+      id: 40,
+      title: 'Universal prior pass / best-score preservation',
+      ruleName: 'Universal retake pass preservation',
+      file: universalPassCheck.file,
+      passed: universalPassCheck.passed,
+      details: universalPassCheck.details,
+    });
+  }
 
   // =========================================================================
   // RULES 21 - 30: DETERMINISTIC VALIDATION FOR STATEFUL COMPACT WORKDAY PROFILE
