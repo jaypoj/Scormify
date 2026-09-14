@@ -31,6 +31,9 @@ jobs:
       - name: Apply Issue 1 source patch
         run: node scripts/apply-issue1-source-patch.mjs
 
+      - name: Instrument syntax stage diagnostics
+        run: node scripts/instrument-issue1-debug.mjs
+
       - name: Type check
         run: bun run lint
 
@@ -41,7 +44,7 @@ jobs:
         run: bun run build
 
       - name: Show source diff
-        run: git diff -- src/utils/patcher.ts src/utils/validator.ts src/utils/packageProcessor.ts
+        run: git diff -- src/utils/codeTransformer.ts src/utils/patcher.ts src/utils/validator.ts src/utils/packageProcessor.ts
 
       - name: Commit tested implementation
         run: |
@@ -51,6 +54,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/utils/patcher.ts src/utils/validator.ts src/utils/packageProcessor.ts
+          git add src/utils/codeTransformer.ts src/utils/patcher.ts src/utils/validator.ts src/utils/packageProcessor.ts
           git commit -m "fix: implement Issue 1 stateful runtime safeguards"
           git push origin HEAD:fix/stateful-runtime-issue-1
