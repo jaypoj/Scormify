@@ -1,0 +1,14 @@
+import fs from 'node:fs';
+const path = 'src/utils/validator.ts';
+let text = fs.readFileSync(path, 'utf8');
+const oldImport = `import { validateIssue1StatefulRuntime } from './issue1StatefulRuntime';`;
+const newImport = `${oldImport}\nimport { findThreshold80Evidence } from './legacyUniversalWorkday';`;
+if (!text.includes(oldImport)) throw new Error('validator import anchor missing');
+text = text.replace(oldImport, newImport);
+const start = text.indexOf('  // 9. Pass threshold 80 preserved — inspect actual effective assessment source.');
+const end = text.indexOf('  // 10. Raw score reporting intact', start);
+if (start < 0 || end < 0) throw new Error('Rule 9 block missing');
+const block = `  // 9. Pass threshold 80 preserved — resolve direct and simple indirect threshold references.\n  const assessmentFile = originalPackage.assessmentFiles?.[0]?.replace(/^\\[[^\\]]+\\]\\s*/, '') || 'scripts/navigation.js';\n  const thresholdEvidence = findThreshold80Evidence(updatedFilesMap, assessmentFile);\n  checks.push({\n    id: 9,\n    title: 'Quiz passing threshold remains 80%',\n    ruleName: 'Pass threshold 80 preserved',\n    file: thresholdEvidence.file,\n    passed: thresholdEvidence.passed,\n    details: thresholdEvidence.details,\n  });\n\n`;
+text = text.slice(0, start) + block + text.slice(end);
+fs.writeFileSync(path, text);
+console.log('Validator threshold update applied.');
