@@ -16,11 +16,7 @@ export interface DefectAnalysisResult {
  * Finds the enclosing function name around a character index in a file.
  */
 function findEnclosingFunction(content: string, index: number): string | undefined {
-  // Look backwards up to 1000 chars for function declaration / method
   const lookback = content.slice(Math.max(0, index - 1000), index);
-
-  // Patterns for function declarations or object methods
-  // e.g. function nextPage() | nextPage: function() | nextPage = function() | nextPage() { | init: function()
   const matches = Array.from(
     lookback.matchAll(
       /(?:function\s+([a-zA-Z0-9_$]+)|([a-zA-Z0-9_$]+)\s*:\s*function|([a-zA-Z0-9_$]+)\s*=\s*(?:function|\([^)]*\)\s*=>)|async\s+function\s+([a-zA-Z0-9_$]+)|([a-zA-Z0-9_$]+)\s*\([^)]*\)\s*\{)/g
@@ -48,106 +44,57 @@ function findEnclosingEventHandler(content: string, index: number): string | und
 
   for (const pat of eventPatterns) {
     const m = lookback.match(pat);
-    if (m) {
-      return m[1];
-    }
+    if (m) return m[1];
   }
   return undefined;
 }
 
-/**
- * Extract context lines (around 200–400 chars) around a match
- */
 function extractContextSnippet(content: string, startIdx: number, endIdx: number): string {
   const start = Math.max(0, startIdx - 150);
   const end = Math.min(content.length, endIdx + 150);
   return content.slice(start, end).trim();
 }
 
-/**
- * Extracts line number from string index
- */
 function getLineNumber(content: string, index: number): number {
   return content.slice(0, index).split('\n').length;
 }
 
-/**
- * Deterministically scans all code files (.js, .html, .htm) and builds a complete
- * STATUS WRITE INVENTORY for SCORM status fields.
- */
 export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): DefectAnalysisResult {
   const inventory: StatusWriteRecord[] = [];
-
   const progressDefect: DefectItem = { detected: false };
   const finishDefect: DefectItem = { detected: false };
   const relaunchDefect: DefectItem = { detected: false };
   const exitDefect: DefectItem = { detected: false };
-
-  // Status fields to search
-  // cmi.core.lesson_status, cmi.completion_status, cmi.success_status
-  const statusFieldRegex =
-    /(?:cmi\.core\.lesson_status|cmi\.completion_status|cmi\.success_status)/g;
-
-  // Patterns for calls that write status:
-  // e.g.:
-  // SCORM.set('cmi.core.lesson_status', ...)
-  // SCORM.setValue('cmi.core.lesson_status', ...)
-  // SafeSCORM.setValue('cmi.core.lesson_status', ...)
-  // SafeSCORM.setStatus(...)
-  // UniversalSCORM.setValue('cmi.core.lesson_status', ...)
-  // LMSSetValue('cmi.core.lesson_status', ...)
-  // SetValue('cmi.core.lesson_status', ...)
-  // api.LMSSetValue('cmi.core.lesson_status', ...)
+  const statusFieldRegex = /(?:cmi\.core\.lesson_status|cmi\.completion_status|cmi\.success_status)/g;
 
   for (const [filePath, content] of Object.entries(fileContents)) {
     if (!content) continue;
     const lowerPath = filePath.toLowerCase();
-    const isCode =
-      lowerPath.endsWith('.js') ||
-      lowerPath.endsWith('.html') ||
-      lowerPath.endsWith('.htm');
+    const isCode = lowerPath.endsWith('.js') || lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
     if (!isCode) continue;
 
-    // First, find all occurrences of status fields
     let fieldMatch: RegExpExecArray | null;
     statusFieldRegex.lastIndex = 0;
 
     while ((fieldMatch = statusFieldRegex.exec(content)) !== null) {
       const matchIndex = fieldMatch.index;
       const cmiField = fieldMatch[0];
-
-      // Look at the statement surrounding this field match (up to 250 chars before and 250 chars after)
       const stmtStart = Math.max(0, matchIndex - 200);
       const stmtEnd = Math.min(content.length, matchIndex + 300);
       const stmtWindow = content.slice(stmtStart, stmtEnd);
       const relIdx = matchIndex - stmtStart;
-
-      // Check if this is a SET / WRITE call
-      // e.g. .set( ..., .setValue( ..., LMSSetValue( ..., SetValue( ...
       const beforeWindow = stmtWindow.slice(0, relIdx);
       const isWriteCall =
-        /(?:\.set|\.setValue|LMSSetValue|SetValue|setStatus)\s*\(\s*['"]?$/i.test(
-          beforeWindow.trimEnd()
-        ) ||
-        /(?:\.set|\.setValue|LMSSetValue|SetValue|setStatus)\s*\(\s*['"][^'"]*$/i.test(
-          beforeWindow
-        );
+        /(?:\.set|\.setValue|LMSSetValue|SetValue|setStatus)\s*\(\s*['"]?$/i.test(beforeWindow.trimEnd()) ||
+        /(?:\.set|\.setValue|LMSSetValue|SetValue|setStatus)\s*\(\s*['"][^'"]*$/i.test(beforeWindow);
 
-      if (!isWriteCall) {
-        // If it's a GET or read (e.g. LMSGetValue, SCORM.get), skip recording as a write
-        continue;
-      }
+      if (!isWriteCall) continue;
 
-      // Extract the value written: look after cmiField in stmtWindow
       const afterWindow = stmtWindow.slice(relIdx + cmiField.length);
-      const valMatch = afterWindow.match(
-        /^\s*['"]?\s*,\s*([^);,\n]+)/
-      );
-
+      const valMatch = afterWindow.match(/^\s*['"]?\s*,\s*([^);,\n]+)/);
       let rawValue = valMatch ? valMatch[1].trim() : 'unknown';
       let valueWritten = rawValue;
       let isLiteral = false;
-
       const literalMatch = rawValue.match(/^['"]([a-zA-Z0-9_\s]+)['"]/);
       if (literalMatch) {
         valueWritten = literalMatch[1];
@@ -158,21 +105,13 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
       const enclosingFunction = findEnclosingFunction(content, matchIndex);
       const enclosingEventHandler = findEnclosingEventHandler(content, matchIndex);
       const contextSnippet = extractContextSnippet(content, stmtStart, stmtEnd);
-
-      // Determine surrounding guard / condition
       let guardOrCondition: string | undefined;
       const nearbyLookback = content.slice(Math.max(0, matchIndex - 350), matchIndex);
       const ifMatch = nearbyLookback.match(/if\s*\(([^)]+)\)\s*\{?[^}]*$/);
-      if (ifMatch) {
-        guardOrCondition = ifMatch[1].trim();
-      } else if (rawValue.includes('?')) {
-        guardOrCondition = 'ternary: ' + rawValue.split('?')[0].trim();
-      }
+      if (ifMatch) guardOrCondition = ifMatch[1].trim();
+      else if (rawValue.includes('?')) guardOrCondition = 'ternary: ' + rawValue.split('?')[0].trim();
 
-      // Now determine classification:
       let classification: StatusWriteClassification = 'BENIGN / NORMAL WRITE';
-
-      // 1. Check for EXIT DEFECT (beforeunload, unload, pagehide, exit session writing completed)
       const isExitContext =
         enclosingEventHandler === 'beforeunload' ||
         enclosingEventHandler === 'unload' ||
@@ -180,12 +119,9 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
         (enclosingFunction && /^(?:beforeunload|onUnload|exit|terminate|finishSession)/i.test(enclosingFunction)) ||
         /window\.addEventListener\s*\(\s*['"](?:beforeunload|unload|pagehide)['"]/i.test(contextSnippet);
 
-      const writesCompleted =
-        valueWritten === 'completed' ||
-        (rawValue.includes('completed') && !rawValue.includes('failed'));
+      const writesCompleted = valueWritten === 'completed' || (rawValue.includes('completed') && !rawValue.includes('failed'));
 
       if (isExitContext && writesCompleted) {
-        // Check if there is a quiz pass check in this exit handler
         const hasQuizGuard =
           contextSnippet.includes('checkAssessmentPassed') ||
           contextSnippet.includes('isPassed') ||
@@ -199,7 +135,6 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
         }
       }
 
-      // 2. Check for RELAUNCH DEFECT (init or load setting incomplete without guarding existing status)
       const isInitContext =
         enclosingEventHandler === 'load' ||
         enclosingEventHandler === 'DOMContentLoaded' ||
@@ -208,10 +143,7 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
         /\b(?:SCORM\.init|SafeSCORM\.init|UniversalSCORM\.init)\b/i.test(nearbyLookback);
 
       const writesIncomplete = valueWritten === 'incomplete';
-
       if (isInitContext && writesIncomplete) {
-        // Check if existing status was checked/preserved first
-        // e.g. read cmi.core.lesson_status or guard checking if status === 'not attempted'
         const hasStatusCheck =
           content.includes("SCORM.get('cmi.core.lesson_status')") ||
           content.includes('SCORM.get("cmi.core.lesson_status")') ||
@@ -234,7 +166,6 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
         }
       }
 
-      // 3. Check for VALID VIEW_AND_PASS / PASS-GATED COMPLETION vs INVALID PROGRESS / FINISH
       const isPassGated =
         (guardOrCondition && (
           guardOrCondition.includes('checkCompletionCriteria') ||
@@ -247,7 +178,6 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
 
       if (writesCompleted && isPassGated && !isExitContext) {
         classification = 'CONDITIONAL COMPLETION — PASS-GATED';
-        // Mark progress defect as clean / pass-gated
         if (!progressDefect.detected) {
           progressDefect.isPassGated = true;
           progressDefect.filePath = filePath;
@@ -255,12 +185,10 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
           progressDefect.details = 'Course completion is conditionally pass-gated behind checkAssessmentPassed (score >= passMark)';
         }
       } else if (writesCompleted && !isExitContext) {
-        // Check if this is in nextPage / finish navigation
         const isNavigationOrFinish =
           (enclosingFunction && /^(?:nextPage|finish|finishCourse|onFinish|completeCourse|handleFinish)/i.test(enclosingFunction)) ||
           /nextPage|finishBtn|#finish/i.test(contextSnippet) ||
           /(?:last page|page progress|progress >= 100|visitedPages)/i.test(contextSnippet);
-
         const isProgressWrite =
           rawValue.includes('progress >= 100') ||
           (guardOrCondition && guardOrCondition.includes('progress')) ||
@@ -299,7 +227,6 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
       });
     }
 
-    // Also check for SafeSCORM.setStatus(...) calls (which implicitly set lesson_status)
     const setStatusRegex = /SafeSCORM\.setStatus\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
     let setStatusMatch: RegExpExecArray | null;
     while ((setStatusMatch = setStatusRegex.exec(content)) !== null) {
@@ -309,7 +236,6 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
       const enclosingFunction = findEnclosingFunction(content, matchIndex);
       const enclosingEventHandler = findEnclosingEventHandler(content, matchIndex);
       const contextSnippet = extractContextSnippet(content, matchIndex - 50, matchIndex + 100);
-
       const isExit =
         enclosingEventHandler === 'beforeunload' ||
         enclosingEventHandler === 'unload' ||
@@ -342,19 +268,22 @@ export function analyzeStatusWritesAndDefects(fileContents: FileContentMap): Def
     }
   }
 
-  return {
-    inventory,
-    progressDefect,
-    finishDefect,
-    relaunchDefect,
-    exitDefect,
-  };
+  return { inventory, progressDefect, finishDefect, relaunchDefect, exitDefect };
 }
 
 /**
  * Analyzes codebase for Stateful Compact Workday profile findings and defect signatures.
  */
 export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): StatefulWorkdayFindings | undefined {
+  // UniversalSCORM/SafeSCORM packages are a separate supported family and must not be
+  // subjected to Stateful Compact-specific post-validation blockers.
+  const combinedSource = Object.values(fileContents).join('\n');
+  const isUniversalRuntime =
+    combinedSource.includes('UniversalSCORM') &&
+    combinedSource.includes('SafeSCORM') &&
+    combinedSource.includes('COURSE_SETTINGS');
+  if (isUniversalRuntime) return undefined;
+
   let isStatefulArchitecture = false;
   let hasGlobalStorageKey = false;
   let isStorageNamespaced = false;
@@ -371,7 +300,6 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
   for (const [filePath, content] of Object.entries(fileContents)) {
     if (!content) continue;
 
-    // 1. Storage Key
     if (content.includes('scormArchitectProgress') || content.includes('STORAGE_KEY')) {
       isStatefulArchitecture = true;
       if (
@@ -385,17 +313,13 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
       }
     }
 
-    // 2. Stale State / Storage fallback risk
     if (content.includes('fromScorm') && content.includes('fromLocal')) {
       isStatefulArchitecture = true;
-      if (content.includes('isLmsAvailable') && (content.includes('resume') || content.includes('ab-initio'))) {
-        // Protected / safe
-      } else {
+      if (!(content.includes('isLmsAvailable') && (content.includes('resume') || content.includes('ab-initio')))) {
         hasStaleStateRisk = true;
       }
     }
 
-    // 3. Progress >100 risk
     if (
       (content.includes('visited.size') || content.includes('visited.length') || content.includes('visited')) &&
       content.includes('PAGES.length')
@@ -408,7 +332,6 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
       }
     }
 
-    // 4. Pass downgrade risk / Best score preservation
     if (
       content.includes('submitQuiz') ||
       content.includes('onQuizSubmit') ||
@@ -422,13 +345,10 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
         content.includes('score >= 80') ||
         content.includes('lesson_status')
       ) {
-        if (!content.includes('priorStatus')) {
-          hasPassDowngradeRisk = true;
-        }
+        if (!content.includes('priorStatus')) hasPassDowngradeRisk = true;
       }
     }
 
-    // 5. Failed quiz exit UX / Failure modal
     if (
       content.includes('scorm-assessment-modal') ||
       (content.includes('Assessment Not Passed') && content.includes('TRY AGAIN') && content.includes('SAVE & EXIT')) ||
@@ -437,7 +357,6 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
       hasFailedQuizModal = true;
     }
 
-    // 6. Save & Exit control
     if (
       content.includes('saveAndExitCourse') ||
       content.includes('btn-save-exit') ||
@@ -446,7 +365,6 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
       hasSaveAndExit = true;
     }
 
-    // 7. Dynamic page fetch
     if (
       content.includes("fetch('pages/") ||
       content.includes('fetch("pages/') ||
@@ -458,18 +376,12 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
       isStatefulArchitecture = true;
     }
 
-    // 8. Inline page compatibility
-    if (
-      content.includes('SCORM_PAGE_CONTENT') ||
-      content.includes('window.SCORM_PAGE_CONTENT')
-    ) {
+    if (content.includes('SCORM_PAGE_CONTENT') || content.includes('window.SCORM_PAGE_CONTENT')) {
       hasInlinePageContent = true;
     }
   }
 
-  if (!isStatefulArchitecture && !hasDynamicFetch && !hasGlobalStorageKey) {
-    return undefined;
-  }
+  if (!isStatefulArchitecture && !hasDynamicFetch && !hasGlobalStorageKey) return undefined;
 
   const globalStorageKey = isStorageNamespaced ? 'NAMESPACED / SAFE' : (hasGlobalStorageKey ? 'DETECTED' : 'NOT_DETECTED');
   const stalePageStateRisk = hasStaleStateRisk ? 'DETECTED' : 'SAFE / ISOLATED';
@@ -491,4 +403,3 @@ export function analyzeStatefulWorkdayFindings(fileContents: FileContentMap): St
     inlinePageCompatibility,
   };
 }
-
