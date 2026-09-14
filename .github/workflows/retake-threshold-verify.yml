@@ -24,29 +24,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Apply retake feedback reset
-        run: node scripts/apply-retake-feedback-reset.mjs
-
-      - name: Apply threshold validator update
-        run: node scripts/apply-validator-threshold.mjs
-
       - name: Type check
         run: bun run lint
 
       - name: Existing regression suites
         run: bun run test
 
-      - name: New regression suite
+      - name: Retake and threshold regression suite
         run: bunx tsx test-retake-threshold.ts
 
       - name: Build
         run: bun run build
-
-      - name: Upload tested source
-        uses: actions/upload-artifact@v4
-        with:
-          name: tested-retake-threshold-source
-          path: |
-            src/utils/codeTransformer.ts
-            src/utils/validator.ts
-          if-no-files-found: error
