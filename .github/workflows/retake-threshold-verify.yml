@@ -1,4 +1,4 @@
-name: Retake and Threshold Apply
+name: Retake and Threshold Verification
 
 on:
   push:
@@ -7,18 +7,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-test-commit:
-    if: github.actor != 'github-actions[bot]'
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: fix/retake-and-legacy-universal
-          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -27,12 +23,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Apply retake feedback reset
-        run: node scripts/apply-retake-feedback-reset.mjs
-
-      - name: Apply threshold validator update
-        run: node scripts/apply-validator-threshold.mjs
 
       - name: Type check
         run: bun run lint
@@ -45,12 +35,3 @@ jobs:
 
       - name: Build
         run: bun run build
-
-      - name: Commit tested source changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/utils/codeTransformer.ts src/utils/validator.ts
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "fix: clear retake feedback and resolve indirect pass thresholds"
-          git push origin HEAD:fix/retake-and-legacy-universal
