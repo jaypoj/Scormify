@@ -15,21 +15,31 @@ function replaceOnce(text, before, after, label) {
   return text.slice(0, first) + after + text.slice(first + before.length);
 }
 
+function patchCodeTransformer() {
+  const path = 'src/utils/codeTransformer.ts';
+  let text = fs.readFileSync(path, 'utf8');
+
+  text = replaceOnce(
+    text,
+    `import { findBalancedBlock, findEventListeners, findFunctionBlock } from './braceScanner';\n`,
+    `import { findBalancedBlock, findEventListeners, findFunctionBlock } from './braceScanner';\nimport { hardenStatefulRuntimeCode } from './issue1StatefulRuntime';\n`,
+    'codeTransformer import Issue #1 hardener'
+  );
+
+  const oldTail = `  // Final sanity check: verify JavaScript syntax\n  try {\n    new Function(code);\n  } catch (err: any) {\n    throw new Error(\`Syntax error after Stateful Workday navigation transformation: \${err.message}\`);\n  }\n\n  return { code, modified, changes, audits };\n}\n`;
+  const newTail = `  // ISSUE #1 FINAL RUNTIME HARDENING\n  // Run after every legacy/stateful transformation so all callers — including tests,\n  // patcher, and real package generation — receive the same effective runtime code.\n  const issue1Runtime = hardenStatefulRuntimeCode(code, courseId);\n  code = issue1Runtime.code;\n  if (issue1Runtime.modified) {\n    modified = true;\n    changes.push(...issue1Runtime.changes);\n    audits.push(...issue1Runtime.audits);\n  }\n\n  // Final sanity check: verify JavaScript syntax\n  try {\n    new Function(code);\n  } catch (err: any) {\n    throw new Error(\`Syntax error after Stateful Workday navigation transformation: \${err.message}\`);\n  }\n\n  return { code, modified, changes, audits };\n}\n`;
+  text = replaceOnce(text, oldTail, newTail, 'integrate Issue #1 hardener into Stateful transformer');
+  fs.writeFileSync(path, text);
+}
+
 function patchPatcher() {
   const path = 'src/utils/patcher.ts';
   let text = fs.readFileSync(path, 'utf8');
   text = replaceOnce(
     text,
     `} from './codeTransformer';\n`,
-    `} from './codeTransformer';\nimport { hardenStatefulRuntimeCode, ensurePageContentManifestEntry } from './issue1StatefulRuntime';\n`,
-    'patcher import Issue #1 hardener'
-  );
-
-  text = replaceOnce(
-    text,
-    `      const result = transformStatefulWorkdayNavigation(original, courseId);\n`,
-    `      const baseResult = transformStatefulWorkdayNavigation(original, courseId);\n      const runtimeResult = hardenStatefulRuntimeCode(baseResult.code, courseId);\n      const result = {\n        code: runtimeResult.code,\n        modified: baseResult.modified || runtimeResult.modified,\n        changes: [...baseResult.changes, ...runtimeResult.changes],\n        audits: [...baseResult.audits, ...runtimeResult.audits],\n      };\n`,
-    'apply Issue #1 hardener after Stateful transformer'
+    `} from './codeTransformer';\nimport { ensurePageContentManifestEntry } from './issue1StatefulRuntime';\n`,
+    'patcher import manifest helper'
   );
 
   const manifestAnchor = `  // 4. Update index.html for script include and Save & Exit control\n`;
@@ -89,6 +99,7 @@ function patchPackageProcessor() {
   fs.writeFileSync(path, text);
 }
 
+patchCodeTransformer();
 patchPatcher();
 patchValidator();
 patchPackageProcessor();
