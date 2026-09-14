@@ -33,5 +33,8 @@ jobs:
       - name: Retake and threshold regression suite
         run: bunx tsx test-retake-threshold.ts
 
+      - name: Universal pass-preservation regression
+        run: bunx tsx test-universal-pass-preservation.ts
+
       - name: Build
         run: bun run build
