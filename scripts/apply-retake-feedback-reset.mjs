@@ -1,0 +1,9 @@
+import fs from 'node:fs';
+const path = 'src/utils/codeTransformer.ts';
+let text = fs.readFileSync(path, 'utf8');
+const before = `      if (typeof resetAssessmentUI === 'function') {\n        resetAssessmentUI();\n      } else {\n        var inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');\n        for (var i = 0; i < inputs.length; i++) {\n          inputs[i].checked = false;\n        }\n      }`;
+const after = `      if (typeof resetAssessmentUI === 'function') {\n        resetAssessmentUI();\n      }\n      var inputs = document.querySelectorAll('input[type="radio"], input[type="checkbox"]');\n      for (var i = 0; i < inputs.length; i++) {\n        inputs[i].checked = false;\n      }\n      var feedbacks = document.querySelectorAll('.assessment-card .feedback, .question .feedback, [id*="assessment-feedback"]');\n      for (var f = 0; f < feedbacks.length; f++) {\n        feedbacks[f].textContent = '';\n        if (feedbacks[f].classList) feedbacks[f].classList.remove('correct', 'incorrect', 'pass', 'fail', 'error', 'success');\n      }\n      var assessmentResult = document.getElementById('assessment-result');\n      if (assessmentResult) {\n        assessmentResult.textContent = '';\n        assessmentResult.className = 'assessment-result';\n      }\n      var markedOptions = document.querySelectorAll('.correct-answer, .incorrect-answer, .option.correct, .option.incorrect');\n      for (var m = 0; m < markedOptions.length; m++) {\n        if (markedOptions[m].classList) markedOptions[m].classList.remove('correct-answer', 'incorrect-answer', 'correct', 'incorrect');\n      }`;
+if (!text.includes(before)) throw new Error('Retake handler anchor missing');
+text = text.replace(before, after);
+fs.writeFileSync(path, text);
+console.log('Retake feedback reset update applied.');
