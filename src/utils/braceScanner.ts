@@ -1,7 +1,7 @@
 /**
  * Deterministic brace-aware and token-aware JavaScript code scanner and transformer.
  * Bypasses fragile multi-brace regex replacements by parsing balanced block delimiters
- * while respecting strings, comments, and nested structures.
+ * while respecting strings, comments, regex literals, and nested structures.
  */
 
 export interface BlockRange {
@@ -14,8 +14,32 @@ export interface BlockRange {
 }
 
 /**
+ * JavaScript uses `/` for both division and regular-expression literals. The
+ * balanced-block scanner only needs a conservative lexical distinction so it
+ * does not mistake the `//` sequence in a regex such as `/^pages\//` for a
+ * line comment. This helper recognizes the common expression-start contexts
+ * in which a regex literal may begin.
+ */
+function isRegexLiteralStart(code: string, slashIndex: number): boolean {
+  let j = slashIndex - 1;
+  while (j >= 0 && /\s/.test(code[j])) j--;
+  if (j < 0) return true;
+
+  const prev = code[j];
+  if ('=([{!?:;,<>+-*%&|^~'.includes(prev)) return true;
+
+  // A regex can follow expression-introducing keywords even though the
+  // previous character itself is an identifier character.
+  let wordEnd = j + 1;
+  let wordStart = j;
+  while (wordStart >= 0 && /[A-Za-z_$]/.test(code[wordStart])) wordStart--;
+  const word = code.slice(wordStart + 1, wordEnd);
+  return /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|yield|await|else|do)$/.test(word);
+}
+
+/**
  * Finds the first balanced block bounded by openChar and closeChar at or after startPos.
- * Ignores characters inside single-quote, double-quote, and template strings,
+ * Ignores characters inside single-quote, double-quote, template strings, regex literals,
  * as well as single-line and multi-line comments.
  */
 export function findBalancedBlock(
@@ -32,6 +56,9 @@ export function findBalancedBlock(
   let isEscaped = false;
   let inLineComment = false;
   let inBlockComment = false;
+  let inRegex = false;
+  let regexEscaped = false;
+  let regexCharClass = false;
 
   for (let i = firstOpen; i < code.length; i++) {
     const ch = code[i];
@@ -62,27 +89,57 @@ export function findBalancedBlock(
       continue;
     }
 
-    // Check for comment starts
+    if (inRegex) {
+      if (regexEscaped) {
+        regexEscaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        regexEscaped = true;
+        continue;
+      }
+      if (ch === '[') {
+        regexCharClass = true;
+        continue;
+      }
+      if (ch === ']' && regexCharClass) {
+        regexCharClass = false;
+        continue;
+      }
+      if (ch === '/' && !regexCharClass) {
+        inRegex = false;
+      }
+      continue;
+    }
+
+    // Check for comment or regex starts.
     if (ch === '/' && i + 1 < code.length) {
       const next = code[i + 1];
       if (next === '/') {
         inLineComment = true;
         i++;
         continue;
-      } else if (next === '*') {
+      }
+      if (next === '*') {
         inBlockComment = true;
         i++;
         continue;
       }
+      if (isRegexLiteralStart(code, i)) {
+        inRegex = true;
+        regexEscaped = false;
+        regexCharClass = false;
+        continue;
+      }
     }
 
-    // Check for string starts
+    // Check for string starts.
     if (ch === '"' || ch === "'" || ch === '`') {
       inString = ch;
       continue;
     }
 
-    // Count balance
+    // Count balance.
     if (ch === openChar) {
       depth++;
     } else if (ch === closeChar) {
