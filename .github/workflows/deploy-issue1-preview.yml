@@ -45,6 +45,9 @@ jobs:
       - name: Cross-profile Workday integrity regression
         run: bunx tsx test-cross-profile-integrity.ts
 
+      - name: Mixed-era batch regression suite
+        run: bunx tsx test-batch-regression.ts
+
       - name: Build
         run: bun run build
 
