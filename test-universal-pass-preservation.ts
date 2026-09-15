@@ -1,11 +1,25 @@
-import { hardenUniversalAssessmentRuntime, validateUniversalPassPreservation } from './src/utils/universalPassPreservation';
+import {
+  hardenUniversalAssessmentRuntime,
+  validateUniversalFullRetakeReset,
+  validateUniversalPassPreservation,
+} from './src/utils/universalPassPreservation';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+function makeClassList(initial: string[] = []) {
+  const values = new Set(initial);
+  return {
+    add(...names: string[]) { names.forEach((name) => values.add(name)); },
+    remove(...names: string[]) { names.forEach((name) => values.delete(name)); },
+    contains(name: string) { return values.has(name); },
+    toString() { return Array.from(values).join(' '); },
+  };
+}
+
 const fixture = `
-window.assessmentData = { attempts: 1, scores: [] };
+window.assessmentData = { attempts: 0, scores: [], lastAnswers: {} };
 const SafeSCORM = globalThis.__SAFE_SCORM__;
 const document = globalThis.__DOC__;
 window.submitAssessment = async function() {
@@ -29,19 +43,63 @@ window.submitAssessment = async function() {
       const isCorrect = correct === selected;
       currentAnswers[index] = { selected, correct, isCorrect };
       if (isCorrect) score++;
+
+      const feedback = container.querySelector('.feedback');
+      if (feedback) {
+        feedback.textContent = isCorrect ? 'Correct' : 'Incorrect';
+        feedback.style.display = 'block';
+        container.classList.add(isCorrect ? 'correct-answer' : 'incorrect-answer');
+      }
     }
   });
 
-  if (answered < questions.length) return;
+  if (answered < questions.length) {
+    window.assessmentData.attempts--;
+    return;
+  }
+
   const percentage = Math.round((score / questions.length) * 100);
   window.assessmentData.scores.push(percentage);
+  window.assessmentData.lastAnswers = currentAnswers;
   const bestScore = Math.max(...window.assessmentData.scores);
   SafeSCORM.setScore(bestScore);
 
+  const submitButton = document.querySelector('.submit-assessment');
+  const retryButton = document.getElementById('retry-assessment');
+  const completionMessage = document.getElementById('completion-message');
+  const results = document.getElementById('assessment-results');
+
   if (percentage >= passingScore) {
     SafeSCORM.setStatus({ completion: 'completed', success: 'passed' });
+    if (results) results.style.display = 'block';
   } else {
     SafeSCORM.setStatus({ success: 'failed' });
+    if (results) results.style.display = 'block';
+    if (submitButton) submitButton.textContent = 'Submit Again';
+    if (results) results.textContent = 'You can adjust your answers and submit again.';
+    // Never show retry button - we allow direct resubmission
+    if (retryButton) retryButton.style.display = 'none';
+    if (completionMessage) completionMessage.style.display = 'none';
+  }
+};
+
+window.retryAssessment = function() {
+  const questions = document.querySelectorAll('.question-container');
+  if (window.assessmentData.attempts < 3) {
+    questions.forEach((container) => {
+      const selected = container.querySelector('input[type="radio"]:checked');
+      if (selected) selected.checked = false;
+    });
+  } else {
+    // Keep incorrect answers visible, only clear correct ones
+    Object.keys(window.assessmentData.lastAnswers || {}).forEach((key) => {
+      const answer = window.assessmentData.lastAnswers[key];
+      if (answer && answer.isCorrect) {
+        const selected = questions[Number(key)].querySelector('input[type="radio"]:checked');
+        if (selected) selected.checked = false;
+      }
+      // Keep incorrect answers and their feedback visible
+    });
   }
 };
 `;
@@ -50,44 +108,180 @@ const transformed = hardenUniversalAssessmentRuntime(fixture);
 assert(transformed.modified, 'Expected Universal fixture to be modified');
 assert(transformed.code.includes('__scormifyPriorPassed'), 'Missing prior-pass guard');
 assert(transformed.code.includes('__scormifyPriorRawScore'), 'Missing prior-score preservation');
+assert(transformed.code.includes('SCORMIFY UNIVERSAL WORKDAY: explicit full-retake gate'), 'Missing explicit full-retake gate');
+assert(transformed.code.includes('SCORMIFY UNIVERSAL WORKDAY: full assessment retake reset'), 'Missing full-retake reset');
+assert(!transformed.code.includes('Submit Again'), 'Unsafe direct Submit Again behavior remains');
+assert(!transformed.code.includes('Keep incorrect answers visible'), 'Unsafe selective retry behavior remains');
 
-const validation = validateUniversalPassPreservation({ 'scripts/navigation.js': transformed.code });
-assert(validation.passed, validation.details);
+const passValidation = validateUniversalPassPreservation({ 'scripts/navigation.js': transformed.code });
+assert(passValidation.passed, passValidation.details);
 
-const store: Record<string, string> = {
-  'cmi.core.lesson_status': 'passed',
-  'cmi.core.score.raw': '100',
-};
-const statusWrites: Array<Record<string, string>> = [];
-const SafeSCORM = {
-  getValue(key: string) { return store[key] || ''; },
-  setScore(score: number) { store['cmi.core.score.raw'] = String(score); return true; },
-  setStatus(value: { completion?: string; success?: string }) {
-    statusWrites.push({ ...value } as Record<string, string>);
-    if (value.success === 'passed' && value.completion === 'completed') store['cmi.core.lesson_status'] = 'passed';
-    else if (value.success === 'failed') store['cmi.core.lesson_status'] = 'failed';
-    else if (value.completion) store['cmi.core.lesson_status'] = value.completion;
-    return true;
-  },
-};
+const fullRetakeValidation = validateUniversalFullRetakeReset({ 'scripts/navigation.js': transformed.code });
+assert(fullRetakeValidation.passed, fullRetakeValidation.details);
 
-const questions = Array.from({ length: 10 }, (_, index) => ({
-  querySelector() {
-    return { dataset: { correct: 'A' }, value: index < 4 ? 'A' : 'B' };
-  },
-}));
+function createRuntime(priorStatus: string, priorRawScore: string, correctCount: number) {
+  const store: Record<string, string> = {
+    'cmi.core.lesson_status': priorStatus,
+    'cmi.core.score.raw': priorRawScore,
+  };
+  const statusWrites: Array<Record<string, string>> = [];
+  const scoreWrites: number[] = [];
 
-const windowMock: any = { assessmentData: { attempts: 1, scores: [] } };
-(globalThis as any).__SAFE_SCORM__ = SafeSCORM;
-(globalThis as any).__DOC__ = { querySelectorAll: () => questions };
+  const SafeSCORM = {
+    getValue(key: string) { return store[key] || ''; },
+    setScore(score: number) {
+      scoreWrites.push(score);
+      store['cmi.core.score.raw'] = String(score);
+      return true;
+    },
+    setStatus(value: { completion?: string; success?: string }) {
+      statusWrites.push({ ...value } as Record<string, string>);
+      if (value.success === 'passed' && value.completion === 'completed') store['cmi.core.lesson_status'] = 'passed';
+      else if (value.success === 'failed') store['cmi.core.lesson_status'] = 'failed';
+      else if (value.completion) store['cmi.core.lesson_status'] = value.completion;
+      return true;
+    },
+  };
 
-const factory = new Function('window', `${transformed.code}; return window.submitAssessment;`);
-const submitAssessment = factory(windowMock);
-await submitAssessment();
+  const feedbacks = Array.from({ length: 10 }, () => ({
+    textContent: 'Old feedback',
+    innerHTML: 'Old feedback',
+    style: { display: 'block' },
+    classList: makeClassList(['feedback', 'incorrect']),
+    removeAttribute() {},
+  }));
 
-assert(store['cmi.core.lesson_status'] === 'passed', `Expected prior pass to remain passed, got ${store['cmi.core.lesson_status']}`);
-assert(store['cmi.core.score.raw'] === '100', `Expected best score 100 to remain, got ${store['cmi.core.score.raw']}`);
-assert(!statusWrites.some((write) => write.completion === 'incomplete'), 'Prior passed learner was incorrectly reset to incomplete on retake');
-assert(statusWrites.some((write) => write.success === 'passed'), 'Expected final retake write to preserve passed status');
+  const inputs = Array.from({ length: 10 }, (_, index) => ({
+    checked: true,
+    dataset: { correct: 'A' },
+    value: index < correctCount ? 'A' : 'B',
+    removeAttribute() {},
+  }));
 
-console.log('PASS — Universal 100% pass followed by 40% retake remains passed with score 100');
+  const questions = Array.from({ length: 10 }, (_, index) => ({
+    classList: makeClassList(['incorrect-answer']),
+    querySelector(selector: string) {
+      if (selector.includes(':checked')) return inputs[index].checked ? inputs[index] : null;
+      if (selector === '.feedback') return feedbacks[index];
+      return null;
+    },
+    querySelectorAll() { return []; },
+  }));
+
+  const results = {
+    textContent: '',
+    style: { display: 'none' },
+    classList: makeClassList(['failed']),
+  };
+  const completionMessage = { style: { display: 'none' } };
+  const scoreMessage = { textContent: '' };
+  const scorePercentage = { textContent: '' };
+  const actionHost = {
+    appendChild(node: any) { dynamicRetryButton = node; },
+  };
+  const submitButton: any = {
+    textContent: 'Submit Assessment',
+    style: { display: '' },
+    disabled: false,
+    parentElement: actionHost,
+  };
+  let dynamicRetryButton: any = null;
+
+  const documentMock: any = {
+    body: actionHost,
+    querySelectorAll(selector: string) {
+      if (selector === '.question-container') return questions;
+      if (selector === 'input[type="radio"], input[type="checkbox"]') return inputs;
+      if (selector === '.feedback') return feedbacks;
+      return [];
+    },
+    querySelector(selector: string) {
+      if (selector === '.submit-assessment') return submitButton;
+      if (selector === '.retry-assessment') return dynamicRetryButton;
+      return null;
+    },
+    getElementById(id: string) {
+      if (id === 'retry-assessment') return dynamicRetryButton;
+      if (id === 'completion-message') return completionMessage;
+      if (id === 'assessment-results') return results;
+      if (id === 'assessment-result') return null;
+      if (id === 'score-message') return scoreMessage;
+      if (id === 'score-percentage') return scorePercentage;
+      if (id === 'submit-assessment') return null;
+      return null;
+    },
+    createElement() {
+      return {
+        type: '',
+        id: '',
+        className: '',
+        textContent: '',
+        style: { display: '' },
+        onclick: null,
+      };
+    },
+  };
+
+  const windowMock: any = {
+    assessmentData: { attempts: 0, scores: [], lastAnswers: {} },
+    scrollTo() {},
+  };
+
+  (globalThis as any).__SAFE_SCORM__ = SafeSCORM;
+  (globalThis as any).__DOC__ = documentMock;
+
+  const factory = new Function('window', `${transformed.code}; return { submitAssessment: window.submitAssessment, retryAssessment: window.retryAssessment };`);
+  const runtime = factory(windowMock);
+
+  return {
+    store,
+    statusWrites,
+    scoreWrites,
+    inputs,
+    feedbacks,
+    questions,
+    results,
+    submitButton,
+    getRetryButton: () => dynamicRetryButton,
+    windowMock,
+    ...runtime,
+  };
+}
+
+// New tester-reported behavior: fail, review feedback, then Retake must start completely blank.
+const failedRuntime = createRuntime('', '0', 4);
+await failedRuntime.submitAssessment();
+assert(failedRuntime.store['cmi.core.lesson_status'] === 'failed', 'Fresh 40% attempt should be failed');
+assert(failedRuntime.getRetryButton(), 'Failed attempt should expose a Retake Assessment button');
+assert(failedRuntime.getRetryButton().textContent === 'Retake Assessment', 'Retry control should say Retake Assessment');
+assert(failedRuntime.submitButton.style.display === 'none', 'Submit button should be hidden until Retake Assessment is chosen');
+assert(failedRuntime.inputs.every((input: any) => input.checked), 'Failed-attempt answers should remain visible until learner chooses Retake');
+
+failedRuntime.retryAssessment();
+assert(failedRuntime.inputs.every((input: any) => !input.checked), 'Retake must clear every selected answer');
+assert(failedRuntime.feedbacks.every((feedback: any) => feedback.textContent === '' && feedback.style.display === 'none'), 'Retake must clear/hide all per-question feedback');
+assert(failedRuntime.questions.every((question: any) => !question.classList.contains('incorrect-answer') && !question.classList.contains('correct-answer')), 'Retake must clear answer-state styling');
+assert(failedRuntime.results.style.display === 'none', 'Retake must hide the prior result panel');
+assert(failedRuntime.submitButton.style.display === '', 'Retake must restore the Submit Assessment button');
+assert(failedRuntime.submitButton.textContent === 'Submit Assessment', 'Retake must restore the Submit Assessment label');
+assert(Object.keys(failedRuntime.windowMock.assessmentData.lastAnswers).length === 0, 'Retake must clear saved lastAnswers UI state');
+
+const scoreWriteCountBeforeBlankSubmit = failedRuntime.scoreWrites.length;
+await failedRuntime.submitAssessment();
+assert(failedRuntime.scoreWrites.length === scoreWriteCountBeforeBlankSubmit, 'Blank retake must not submit a score; every question must be answered again');
+
+// Historical invariant must still survive the new UI repair: 100% prior pass + 40% retake remains passed/100.
+const passedRuntime = createRuntime('passed', '100', 4);
+await passedRuntime.submitAssessment();
+assert(passedRuntime.store['cmi.core.lesson_status'] === 'passed', `Expected prior pass to remain passed, got ${passedRuntime.store['cmi.core.lesson_status']}`);
+assert(passedRuntime.store['cmi.core.score.raw'] === '100', `Expected best score 100 to remain, got ${passedRuntime.store['cmi.core.score.raw']}`);
+assert(!passedRuntime.statusWrites.some((write) => write.completion === 'incomplete'), 'Prior passed learner was incorrectly reset to incomplete on retake');
+assert(passedRuntime.statusWrites.some((write) => write.success === 'passed'), 'Expected lower retake to preserve passed status');
+
+// Older Universal packages with no retake/direct-resubmit state machine remain governed by historical rules only.
+const noRetakeValidation = validateUniversalFullRetakeReset({
+  'scripts/navigation.js': `window.submitAssessment = function() { const questions = []; const answered = 0; if (answered < questions.length) return; };`,
+});
+assert(noRetakeValidation.passed, 'Universal package with no retake behavior should remain not-applicable for the new rule');
+
+console.log('PASS — Universal historical repairs retained; failed retake now requires a full blank reassessment');
