@@ -42,6 +42,9 @@ jobs:
       - name: Universal pass-preservation regression
         run: bunx tsx test-universal-pass-preservation.ts
 
+      - name: Cross-profile Workday integrity regression
+        run: bunx tsx test-cross-profile-integrity.ts
+
       - name: Build
         run: bun run build
 
