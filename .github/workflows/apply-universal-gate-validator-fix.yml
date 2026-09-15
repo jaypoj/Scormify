@@ -1,11 +1,12 @@
-name: Apply Universal Explicit-Gate Validator Fix
+name: Apply Universal Gate Fix
 
 on:
   push:
     branches:
       - fix/retake-and-legacy-universal
     paths:
-      - .github/workflows/apply-universal-gate-validator-fix.yml
+      - '.github/workflows/apply-universal-gate-validator-fix.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,66 +15,17 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout active branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: fix/retake-and-legacy-universal
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      - name: Apply targeted patch
-        shell: bash
+      - name: Apply patch
+        run: python tools/apply_universal_gate_fix.py
+      - name: Verify
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          p = Path('src/utils/universalPassPreservation.ts')
-          text = p.read_text()
-          old = """  const hasExplicitGate = body.includes(SHOW_RETAKE_MARKER);\n  if (hasExplicitGate) return false;"""
-          new = """  const hasExplicitGate = body.includes(SHOW_RETAKE_MARKER) ||\n    /submitButton\\.style\\.display\\s*=\\s*['\"]none['\"][\\s\\S]{0,220}(?:window\\.)?__scormifyShowFullRetake\\s*\\(\\s*\\)/i.test(body);\n  if (hasExplicitGate) return false;"""
-          if old not in text:
-              raise SystemExit('Universal validator anchor not found')
-          p.write_text(text.replace(old, new, 1))
-
-          t = Path('test-batch-regression.ts')
-          test = t.read_text()
-          anchor = """assert(universalCheck.passed, `U-BATCH: Rule 40 still false-fails safe Universal output: ${universalCheck.details}`);\n"""
-          addition = r'''
-
-// Real batch variant: some Universal builders had the actionable Submit Again
-// assignment but not the older "Never show retry button" comment. The hardener
-// therefore installs the helper call in submitAssessment while the gate marker
-// itself lives in the helper definition outside that function body. Stale text
-// containing "Submit Again" must not make Rule 40 report directResubmit=true.
-const universalNoInlineMarkerRaw = universalRaw.replace(
-  "    // Never show retry button - we allow direct resubmission\n    if (retryButton) retryButton.style.display = 'none';\n",
-  "    console.log('legacy builder label: Submit Again');\n"
-);
-const universalNoInlineMarkerHardened = hardenUniversalAssessmentRuntime(universalNoInlineMarkerRaw);
-assert(universalNoInlineMarkerHardened.modified, 'U-BATCH-2: Universal hardener did not modify no-inline-marker variant');
-const universalNoInlineMarkerCheck = validateUniversalPassPreservation({
-  'scripts/navigation.js': universalNoInlineMarkerHardened.code,
-});
-assert(
-  universalNoInlineMarkerCheck.passed,
-  `U-BATCH-2: safe explicit helper gate still false-fails as direct resubmit: ${universalNoInlineMarkerCheck.details}`
-);
-'''
-          if anchor not in test:
-              raise SystemExit('Batch regression anchor not found')
-          if 'U-BATCH-2:' not in test:
-              test = test.replace(anchor, anchor + addition, 1)
-          t.write_text(test)
-          PY
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Verify full regression contract
-        run: |
+          bun install --frozen-lockfile
           bun run lint
           bun run test
           bunx tsx test-retake-threshold.ts
@@ -81,8 +33,7 @@ assert(
           bunx tsx test-cross-profile-integrity.ts
           bunx tsx test-batch-regression.ts
           bun run build
-
-      - name: Commit targeted fix
+      - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -90,5 +41,3 @@ assert(
           git diff --cached --quiet && exit 0
           git commit -m "fix: recognize Universal explicit retake helper gate"
           git push origin HEAD:fix/retake-and-legacy-universal
-
-# trigger: 2026-09-15 mixed-era batch follow-up
