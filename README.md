@@ -226,3 +226,8 @@ The active GitHub Pages build is expected at:
 `https://jaypoj.github.io/Scormify/`
 
 Do not treat a successful upload alone as migration completion. Workday runtime behavior still requires pilot validation with fresh learner/enrollment scenarios, failure below 80%, pass at/above 80%, relaunch, retake, best-score preservation, and Exit Course behavior.
+
+
+## 2026-09-15 Universal multi-resubmit regression
+
+A five-package mixed-era rerun exposed a Universal-only Rule 40 failure: three real Universal packages passed cross-profile Rules 61/62 but Rule 40 still found an executable `Submit Again` assignment. Root cause: the Universal transformer replaced only the first matching `submitButton.* = 'Submit Again'` statement. Some legacy builder outputs contain multiple equivalent assignments. The fix is deliberately additive and keeps Rule 40 strict: Scormify now neutralizes **all** executable `Submit Again` assignments in the parsed `submitAssessment` function, including `textContent`, `innerText`, and `innerHTML` variants. The validator is not weakened. Post-remediation diagnostic warnings are also reconciled with final cross-profile findings so resolved Exit/retake/feedback warnings do not remain in exported JSON.

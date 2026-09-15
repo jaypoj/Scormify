@@ -79,6 +79,28 @@ assert(
   `U-BATCH-2: safe explicit helper gate still false-fails as direct resubmit: ${universalNoInlineMarkerCheck.details}`
 );
 
+
+// Real mixed-era variant from the 2026-09-15 five-package rerun: some Universal
+// submitAssessment bodies contain more than one executable Submit Again write.
+// The transformer must neutralize every one, not merely the first match.
+const universalMultiSubmitAgainRaw = universalRaw.replace(
+  "    submitButton.textContent = 'Submit Again';\n",
+  "    submitButton.textContent = 'Submit Again';\n    console.log('legacy duplicate submit label');\n    submitButton.innerHTML = 'Submit Again';\n"
+);
+const universalMultiSubmitAgainHardened = hardenUniversalAssessmentRuntime(universalMultiSubmitAgainRaw);
+assert(universalMultiSubmitAgainHardened.modified, 'U-BATCH-3: Universal hardener did not modify multiple Submit Again writes');
+const remainingActionableSubmitAgain = /submitButton\.(?:textContent|innerText|innerHTML)\s*=\s*['\"]Submit Again['\"]/i.test(
+  universalMultiSubmitAgainHardened.code
+);
+assert(!remainingActionableSubmitAgain, 'U-BATCH-3: actionable Submit Again assignment remained after hardening');
+const universalMultiSubmitAgainCheck = validateUniversalPassPreservation({
+  'scripts/navigation.js': universalMultiSubmitAgainHardened.code,
+});
+assert(
+  universalMultiSubmitAgainCheck.passed,
+  `U-BATCH-3: Rule 40 still fails after all actionable Submit Again writes are neutralized: ${universalMultiSubmitAgainCheck.details}`
+);
+
 const universalCross = analyzeCrossProfileWorkdayIntegrity(
   {
     'index.html': '<html><body><button onclick="exitCourse()">Exit Course</button><script>function exitCourse(){SCORM.set(\'cmi.core.exit\',\'suspend\');SCORM.commit();SCORM.finish();}</script></body></html>',

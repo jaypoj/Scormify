@@ -168,8 +168,9 @@ function replaceFailureDirectResubmit(body: string): { body: string; changed: bo
   let updated = body;
   let changed = false;
 
-  const submitAgainPattern = /submitButton\.textContent\s*=\s*['"]Submit Again['"]\s*;?/i;
+  const submitAgainPattern = /submitButton\.(?:textContent|innerText|innerHTML)\s*=\s*['"]Submit Again['"]\s*;?/gi;
   if (submitAgainPattern.test(updated)) {
+    submitAgainPattern.lastIndex = 0;
     updated = updated.replace(
       submitAgainPattern,
       `submitButton.textContent = 'Submit Assessment';

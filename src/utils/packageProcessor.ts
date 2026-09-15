@@ -877,6 +877,34 @@ export async function patchSinglePackage(
     !statefulDefectsRemaining &&
     !postScan.finishDefect.detected;
 
+  const finalCrossProfileFindings = crossProfileResult?.after || pkg.crossProfileWorkdayFindings;
+  const finalWarnings = (pkg.warnings || []).filter((warning) => {
+    if (!finalCrossProfileFindings) return true;
+
+    if (
+      warning.startsWith('Exit Course integrity: visible Exit Course / Save & Exit control is missing.') &&
+      finalCrossProfileFindings.exitControl !== 'MISSING'
+    ) return false;
+
+    if (
+      warning.startsWith('Exit Course integrity: exit handler is missing, unsafe, or not correctly wired.') &&
+      finalCrossProfileFindings.exitHandler === 'SAFE' &&
+      finalCrossProfileFindings.exitWiring === 'WIRED'
+    ) return false;
+
+    if (
+      warning.startsWith('Final assessment integrity: failed attempt can retain/selectively correct prior answers') &&
+      finalCrossProfileFindings.assessmentRetake === 'SAFE'
+    ) return false;
+
+    if (
+      warning.startsWith('Final assessment integrity: failed assessment may reveal answer feedback/correctness before retake.') &&
+      finalCrossProfileFindings.assessmentFeedbackProtection === 'SAFE'
+    ) return false;
+
+    return true;
+  });
+
   const patchedZipSizeBytes = patchedBlob ? patchedBlob.size : 0;
   const patchedZipGenerated = Boolean(patchedBlob && patchedBlob.size > 0);
   const downloadReady = validationPassed && patchedZipGenerated;
@@ -905,7 +933,8 @@ export async function patchSinglePackage(
     validationPassed,
     actionStatus: validationPassed ? 'PATCHED' : 'FAILED VALIDATION',
     patchExecutionReport: patchResult.executionReport,
-    crossProfileWorkdayFindings: crossProfileResult?.after || pkg.crossProfileWorkdayFindings,
+    crossProfileWorkdayFindings: finalCrossProfileFindings,
+    warnings: finalWarnings,
     error: validationPassed ? undefined : 'Validation failed after remediation attempt',
   };
 
