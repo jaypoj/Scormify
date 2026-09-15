@@ -47,6 +47,14 @@ export interface StatusWriteRecord {
   classification: StatusWriteClassification;
 }
 
+export interface CrossProfileWorkdayFindings {
+  exitControl: 'PRESENT' | 'MISSING' | 'NOT_APPLICABLE';
+  exitHandler: 'SAFE' | 'MISSING_OR_UNSAFE' | 'NOT_APPLICABLE';
+  exitWiring: 'WIRED' | 'MISSING_OR_BROKEN' | 'NOT_APPLICABLE';
+  assessmentRetake: 'SAFE' | 'UNSAFE' | 'NOT_APPLICABLE';
+  assessmentFeedbackProtection: 'SAFE' | 'UNSAFE' | 'NOT_APPLICABLE';
+}
+
 export interface NestedPackageInspection {
   nestedZipName: string;
   nestedZipPath: string;
@@ -86,6 +94,7 @@ export interface NestedPackageInspection {
   passScoreReferences?: PassScoreEvidence[];
   manifestData?: ManifestData;
   statefulWorkdayFindings?: StatefulWorkdayFindings;
+  crossProfileWorkdayFindings?: CrossProfileWorkdayFindings;
 }
 
 export interface StatefulWorkdayFindings {
@@ -228,6 +237,7 @@ export interface PackageInspectionResult {
   relaunchDefect: DefectItem;
   exitDefect: DefectItem;
   statefulWorkdayFindings?: StatefulWorkdayFindings;
+  crossProfileWorkdayFindings?: CrossProfileWorkdayFindings;
 
   // Profile & Status
   repairProfile: RepairProfile;
