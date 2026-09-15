@@ -180,15 +180,20 @@ function hasSafeFullRetake(fileContents: Record<string, string>, profile: Repair
 function hasSafeFeedbackProtection(fileContents: Record<string, string>, profile: RepairProfile): boolean {
   if (!hasFinalAssessmentRuntime(fileContents)) return true;
   const combined = Object.values(fileContents).join('\n');
-  if (combined.includes(FEEDBACK_PROTECTION_MARKER)) return true;
 
   if (profile === 'KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1') {
     const bodies = activeSubmitBodies(fileContents);
-    return bodies.length > 0 && bodies.every((body) =>
-      body.includes('ISSUE1_ASSESSMENT_PRESERVATION') && body.includes('showAssessmentModal') && !/gradeQuestion\s*\(/.test(body)
+    const helperPresent =
+      combined.includes(FEEDBACK_PROTECTION_MARKER) &&
+      combined.includes('function scormifyProtectStatefulFailedFinalAssessmentFeedback');
+    return helperPresent && bodies.length > 0 && bodies.every((body) =>
+      body.includes('ISSUE1_ASSESSMENT_PRESERVATION') &&
+      body.includes('showAssessmentModal') &&
+      body.includes('scormifyProtectStatefulFailedFinalAssessmentFeedback')
     );
   }
 
+  if (combined.includes(FEEDBACK_PROTECTION_MARKER)) return true;
   return false;
 }
 
@@ -341,18 +346,23 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
 
   if (!repairedExisting) {
     if (/<\/header>/i.test(updated)) {
-      updated = updated.replace(/<\/header>/i, `${CANONICAL_EXIT_BUTTON}\n</header>`);
+      updated = updated.replace(/<\/header>/i, `${CANONICAL_EXIT_BUTTON}\
+</header>`);
     } else if (/<body\b[^>]*>/i.test(updated)) {
-      updated = updated.replace(/(<body\b[^>]*>)/i, `$1\n<div style="position:fixed;top:10px;right:12px;z-index:2147483000;">${CANONICAL_EXIT_BUTTON}</div>`);
+      updated = updated.replace(/(<body\b[^>]*>)/i, `$1\
+<div style="position:fixed;top:10px;right:12px;z-index:2147483000;">${CANONICAL_EXIT_BUTTON}</div>`);
     } else {
-      updated = `${CANONICAL_EXIT_BUTTON}\n${updated}`;
+      updated = `${CANONICAL_EXIT_BUTTON}\
+${updated}`;
     }
     changed = true;
   }
 
   if (!updated.includes(EXIT_MARKER)) {
-    if (/<\/body>/i.test(updated)) updated = updated.replace(/<\/body>/i, `${CANONICAL_EXIT_SCRIPT}\n</body>`);
-    else updated += `\n${CANONICAL_EXIT_SCRIPT}`;
+    if (/<\/body>/i.test(updated)) updated = updated.replace(/<\/body>/i, `${CANONICAL_EXIT_SCRIPT}\
+</body>`);
+    else updated += `\
+${CANONICAL_EXIT_SCRIPT}`;
     changed = true;
   }
 
@@ -512,7 +522,10 @@ function hardenKnownCompactFinalAssessment(code: string): { code: string; change
 `;
 
   let updated = code.slice(0, block.block.contentStart) + newBody + code.slice(block.block.contentEnd);
-  if (!updated.includes(FEEDBACK_PROTECTION_MARKER)) updated += `\n\n${COMPACT_ASSESSMENT_HELPERS}\n`;
+  if (!updated.includes(FEEDBACK_PROTECTION_MARKER)) updated += `\
+\
+${COMPACT_ASSESSMENT_HELPERS}\
+`;
 
   try {
     new Function(updated);
@@ -524,6 +537,53 @@ function hardenKnownCompactFinalAssessment(code: string): { code: string; change
     code: updated,
     changed: true,
     description: `Hardened ${functionName} so failed attempts hide answer-revealing feedback, require an explicit full blank retake, preserve best score/pass, and require all questions to be answered`,
+  };
+}
+
+const STATEFUL_FEEDBACK_HELPER = `
+/* ${FEEDBACK_PROTECTION_MARKER} */
+function scormifyProtectStatefulFailedFinalAssessmentFeedback() {
+  if (typeof document === 'undefined') return;
+  var feedbacks = document.querySelectorAll('.assessment-card .feedback, .question-container .feedback, [id*="assessment-feedback"]');
+  for (var i = 0; i < feedbacks.length; i++) {
+    feedbacks[i].textContent = '';
+    if ('innerHTML' in feedbacks[i]) feedbacks[i].innerHTML = '';
+    if (feedbacks[i].style) feedbacks[i].style.display = 'none';
+    if (feedbacks[i].classList) feedbacks[i].classList.remove('correct', 'incorrect', 'correct-feedback', 'incorrect-feedback', 'success', 'error');
+  }
+  var marks = document.querySelectorAll('.correct-answer, .incorrect-answer, .option.correct, .option.incorrect, .question.correct, .question.incorrect');
+  for (var m = 0; m < marks.length; m++) {
+    if (marks[m].classList) marks[m].classList.remove('correct-answer', 'incorrect-answer', 'correct', 'incorrect');
+  }
+}
+`;
+
+function hardenStatefulFailedFeedback(code: string): { code: string; changed: boolean; description?: string } {
+  if (!code.includes('ISSUE1_ASSESSMENT_PRESERVATION') || !code.includes('showAssessmentModal')) {
+    return { code, changed: false };
+  }
+
+  const modalCall = "if (typeof showAssessmentModal === 'function') showAssessmentModal(__currentScore, __bestScore, __finalStatus);";
+  if (!code.includes(modalCall)) return { code, changed: false };
+
+  let updated = code;
+  const protectedModalCall = "if (__currentScore < 80) scormifyProtectStatefulFailedFinalAssessmentFeedback();\n  " + modalCall;
+  updated = updated.split(modalCall).join(protectedModalCall);
+
+  if (!updated.includes(FEEDBACK_PROTECTION_MARKER)) {
+    updated += `\n\n${STATEFUL_FEEDBACK_HELPER}\n`;
+  }
+
+  try {
+    new Function(updated);
+  } catch (err: any) {
+    throw new Error(`Syntax error after Stateful feedback protection: ${err.message}`);
+  }
+
+  return {
+    code: updated,
+    changed: updated !== code,
+    description: 'Protected Stateful failed final assessments from revealing answer feedback/correctness before the existing Retake / Save & Exit modal',
   };
 }
 
@@ -641,6 +701,33 @@ export function hardenCrossProfileWorkdayPackage(
           contentChanged: true,
         });
         logs.push(`Cross-profile Compact final-assessment integrity repaired in ${filePath}`);
+        break;
+      }
+    }
+  }
+
+  if (profile === 'KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1') {
+    for (const filePath of navCandidates) {
+      const original = updatedContents[filePath];
+      if (!original) continue;
+      const hardened = hardenStatefulFailedFeedback(original);
+      if (hardened.changed && hardened.code !== original) {
+        updatedContents[filePath] = hardened.code;
+        if (!filesModified.includes(filePath)) filesModified.push(filePath);
+        codeChanges.push({
+          filePath,
+          description: hardened.description || 'Protected Stateful failed-assessment feedback',
+          beforeSnippet: original.slice(0, 300),
+          afterSnippet: hardened.code.slice(0, 300),
+        });
+        audits.push({
+          filePath,
+          patternExpected: 'Stateful failed final assessment clears answer-revealing feedback before the existing modal',
+          matchFound: true,
+          replacementApplied: true,
+          contentChanged: true,
+        });
+        logs.push(`Cross-profile Stateful failed-feedback protection applied in ${filePath}`);
         break;
       }
     }
