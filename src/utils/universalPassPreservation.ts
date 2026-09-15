@@ -385,48 +385,10 @@ export function hardenUniversalAssessmentRuntime(originalCode: string): Universa
   return { code, modified: changed, changes, audits };
 }
 
-export function validateUniversalPassPreservation(
-  updatedFilesMap: Record<string, string>
-): { passed: boolean; file: string; details: string } {
-  const candidate = Object.entries(updatedFilesMap).find(([, content]) =>
-    Boolean(content && /submitAssessment\s*=\s*(?:async\s+)?function|function\s+submitAssessment/.test(content))
-  );
-
-  if (!candidate) {
-    return {
-      passed: true,
-      file: 'scripts/navigation.js',
-      details: 'PASS — no legacy submitAssessment retake runtime detected; prior-pass retake invariant is not applicable to this Universal package',
-    };
-  }
-
-  const [file, content] = candidate;
-  const block = findFunctionBlock(content, SUBMIT_PATTERN);
-  if (!block) {
-    return { passed: false, file, details: 'FAIL — submitAssessment function could not be structurally parsed' };
-  }
-
-  const body = block.block.body;
-  const hasPriorStatus = body.includes("SafeSCORM.getValue('cmi.core.lesson_status')") && body.includes('__scormifyPriorPassed');
-  const hasPriorScore = body.includes("SafeSCORM.getValue('cmi.core.score.raw')") && /Math\.max\([^)]*__scormifyPriorRawScore/.test(body);
-  const resetGuarded = /attempts\s*>\s*1\s*&&\s*!__scormifyPriorPassed/.test(body);
-  const failGuarded = /__scormifyPriorPassed\s*\|\|\s*bestScore\s*>=\s*passingScore/.test(body) &&
-    body.includes("SafeSCORM.setStatus({ completion: 'completed', success: 'passed' })");
-
-  const passed = hasPriorStatus && hasPriorScore && resetGuarded && failGuarded;
-  return {
-    passed,
-    file,
-    details: passed
-      ? 'PASS — Universal assessment preserves prior passed status and authoritative best score across lower retakes'
-      : `FAIL — Universal retake preservation incomplete (priorStatus=${hasPriorStatus}, priorScore=${hasPriorScore}, resetGuard=${resetGuarded}, failedRetakeGuard=${failGuarded})`,
-  };
-}
-
 /**
- * Additive validation for the newer tester finding. This does not replace any
+ * Additive validation for the tester finding. This does not replace any
  * historic validator rule. It applies only when the legacy Universal
- * submitAssessment runtime is present.
+ * submitAssessment runtime exposes a retake/direct-resubmit path.
  */
 export function validateUniversalFullRetakeReset(
   updatedFilesMap: Record<string, string>
@@ -477,5 +439,49 @@ export function validateUniversalFullRetakeReset(
     details: passed
       ? 'PASS — failed Universal assessment requires Retake Assessment; all prior answers/feedback are cleared and every question must be answered again'
       : `FAIL — Universal full-retake reset incomplete (directResubmit=${unsafeDirectResubmit}, selectiveRetry=${unsafeSelectiveRetry}, retakeGate=${explicitRetakeGate}, fullReset=${fullReset}, allAnswersRequired=${requiresAllAnswers})`,
+  };
+}
+
+export function validateUniversalPassPreservation(
+  updatedFilesMap: Record<string, string>
+): { passed: boolean; file: string; details: string } {
+  const candidate = Object.entries(updatedFilesMap).find(([, content]) =>
+    Boolean(content && /submitAssessment\s*=\s*(?:async\s+)?function|function\s+submitAssessment/.test(content))
+  );
+
+  if (!candidate) {
+    return {
+      passed: true,
+      file: 'scripts/navigation.js',
+      details: 'PASS — no legacy submitAssessment retake runtime detected; Universal retake invariants are not applicable to this package',
+    };
+  }
+
+  const [file, content] = candidate;
+  const block = findFunctionBlock(content, SUBMIT_PATTERN);
+  if (!block) {
+    return { passed: false, file, details: 'FAIL — submitAssessment function could not be structurally parsed' };
+  }
+
+  const body = block.block.body;
+  const hasPriorStatus = body.includes("SafeSCORM.getValue('cmi.core.lesson_status')") && body.includes('__scormifyPriorPassed');
+  const hasPriorScore = body.includes("SafeSCORM.getValue('cmi.core.score.raw')") && /Math\.max\([^)]*__scormifyPriorRawScore/.test(body);
+  const resetGuarded = /attempts\s*>\s*1\s*&&\s*!__scormifyPriorPassed/.test(body);
+  const failGuarded = /__scormifyPriorPassed\s*\|\|\s*bestScore\s*>=\s*passingScore/.test(body) &&
+    body.includes("SafeSCORM.setStatus({ completion: 'completed', success: 'passed' })");
+  const historicalPassPreserved = hasPriorStatus && hasPriorScore && resetGuarded && failGuarded;
+
+  // Rule 40 is already wired into the main validator for Universal packages. Fold the
+  // new full-retake invariant into that existing gate so this new check is build-blocking
+  // without replacing or weakening any of Rules 1-20 or the Stateful profile rules.
+  const fullRetakeCheck = validateUniversalFullRetakeReset(updatedFilesMap);
+  const passed = historicalPassPreserved && fullRetakeCheck.passed;
+
+  return {
+    passed,
+    file,
+    details: passed
+      ? 'PASS — Universal prior pass/best score is preserved and failed retakes restart as a complete blank assessment'
+      : `FAIL — Universal retake validation incomplete (priorStatus=${hasPriorStatus}, priorScore=${hasPriorScore}, resetGuard=${resetGuarded}, failedRetakeGuard=${failGuarded}); ${fullRetakeCheck.details}`,
   };
 }
