@@ -171,20 +171,18 @@ function replaceFailureDirectResubmit(body: string): { body: string; changed: bo
   if (submitAgainPattern.test(updated)) {
     updated = updated.replace(
       submitAgainPattern,
-      `submitButton.textContent = 'Submit Assessment';\
-                submitButton.style.display = 'none';\
+      `submitButton.textContent = 'Submit Assessment';
+                submitButton.style.display = 'none';
                 window.__scormifyShowFullRetake();`
     );
     changed = true;
   }
 
-  const directResubmitCommentAndHide = /\/\/\s*Never show retry button[^\
-]*\
-\s*if\s*\(\s*retryButton\s*\)\s*retryButton\.style\.display\s*=\s*['"]none['"]\s*;?/i;
+  const directResubmitCommentAndHide = /\/\/\s*Never show retry button[^\n]*\n\s*if\s*\(\s*retryButton\s*\)\s*retryButton\.style\.display\s*=\s*['"]none['"]\s*;?/i;
   if (directResubmitCommentAndHide.test(updated)) {
     updated = updated.replace(
       directResubmitCommentAndHide,
-      `// ${SHOW_RETAKE_MARKER}\
+      `// ${SHOW_RETAKE_MARKER}
                 window.__scormifyShowFullRetake();`
     );
     changed = true;
@@ -358,8 +356,7 @@ export function hardenUniversalAssessmentRuntime(originalCode: string): Universa
   if (originalUnsafeDirectResubmit && !code.includes(SHOW_RETAKE_HELPER_DEFINITION)) {
     const refreshedSubmit = findFunctionBlock(code, SUBMIT_PATTERN);
     if (refreshedSubmit) {
-      code = code.slice(0, refreshedSubmit.block.end) + '\
-' + SHOW_RETAKE_HELPER + code.slice(refreshedSubmit.block.end);
+      code = code.slice(0, refreshedSubmit.block.end) + '\n' + SHOW_RETAKE_HELPER + code.slice(refreshedSubmit.block.end);
       changed = true;
       changes.push('Added deterministic Retake Assessment button helper');
     }
@@ -383,8 +380,7 @@ export function hardenUniversalAssessmentRuntime(originalCode: string): Universa
   } else if (originalUnsafeDirectResubmit) {
     const refreshedSubmit = findFunctionBlock(code, SUBMIT_PATTERN);
     if (refreshedSubmit) {
-      code = code.slice(0, refreshedSubmit.block.end) + '\
-' + FULL_RETAKE_FUNCTION + code.slice(refreshedSubmit.block.end);
+      code = code.slice(0, refreshedSubmit.block.end) + '\n' + FULL_RETAKE_FUNCTION + code.slice(refreshedSubmit.block.end);
       changed = true;
       changes.push('Added full blank retryAssessment handler for direct-resubmission Universal runtime');
       audits.push({ patternExpected: 'retryAssessment function', matchFound: false, replacementApplied: true, reason: 'Injected deterministic full-retake handler' });
