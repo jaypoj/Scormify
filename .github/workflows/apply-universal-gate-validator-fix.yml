@@ -90,3 +90,5 @@ assert(
           git diff --cached --quiet && exit 0
           git commit -m "fix: recognize Universal explicit retake helper gate"
           git push origin HEAD:fix/retake-and-legacy-universal
+
+# trigger: 2026-09-15 mixed-era batch follow-up
