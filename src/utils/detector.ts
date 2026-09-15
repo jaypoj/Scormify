@@ -6,6 +6,10 @@ import {
 } from '../types';
 import { analyzeStatusWritesAndDefects, analyzeStatefulWorkdayFindings, FileContentMap } from './statusInventory';
 import { detectAllPassScores } from './passScoreDetector';
+import {
+  analyzeCrossProfileWorkdayIntegrity,
+  hasBlockingCrossProfileFinding,
+} from './crossProfileWorkdayHardening';
 
 export function detectScormDetails(
   file: File,
@@ -253,6 +257,37 @@ export function detectScormDetails(
     actionStatus = 'MANUAL REVIEW';
   }
 
+  // 6b. CROSS-PROFILE WORKDAY INTEGRITY
+  // These findings are additive to every historical profile-specific detector.
+  // A package that is otherwise clean still requires patching if its known custom
+  // runtime has a missing/broken Exit Course path, unsafe selective retake, or
+  // answer-revealing failed-final-assessment feedback.
+  const crossProfileWorkdayFindings = analyzeCrossProfileWorkdayIntegrity(
+    fileContents,
+    repairProfile,
+    manifestData.launchResource
+  );
+
+  if (hasBlockingCrossProfileFinding(crossProfileWorkdayFindings) && manualReviewReasons.length === 0) {
+    actionStatus = 'READY_TO_PATCH';
+  }
+
+  if (crossProfileWorkdayFindings.exitControl === 'MISSING') {
+    warnings.push('Exit Course integrity: visible Exit Course / Save & Exit control is missing.');
+  }
+  if (
+    crossProfileWorkdayFindings.exitHandler === 'MISSING_OR_UNSAFE' ||
+    crossProfileWorkdayFindings.exitWiring === 'MISSING_OR_BROKEN'
+  ) {
+    warnings.push('Exit Course integrity: exit handler is missing, unsafe, or not correctly wired.');
+  }
+  if (crossProfileWorkdayFindings.assessmentRetake === 'UNSAFE') {
+    warnings.push('Final assessment integrity: failed attempt can retain/selectively correct prior answers instead of starting a full blank retake.');
+  }
+  if (crossProfileWorkdayFindings.assessmentFeedbackProtection === 'UNSAFE') {
+    warnings.push('Final assessment integrity: failed assessment may reveal answer feedback/correctness before retake.');
+  }
+
   return {
     id: `${file.name}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     file,
@@ -299,6 +334,7 @@ export function detectScormDetails(
     relaunchDefect,
     exitDefect,
     statefulWorkdayFindings,
+    crossProfileWorkdayFindings,
     repairProfile,
     manualReviewReasons,
     actionStatus,
