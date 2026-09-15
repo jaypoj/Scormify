@@ -127,6 +127,8 @@ Scormify deliberately uses sequential, deterministic processing:
 - Failed assessment uses an accessible Retake / Save & Exit modal.
 - Prior pass and best score are preserved.
 - Existing approved Save & Exit behavior must be recognized by the cross-profile layer and left intact.
+- If the retained legacy `gradeQuestion()` path can expose per-question correct-answer feedback, Scormify clears that feedback/correctness styling **only on failed final assessments** immediately before the existing failure modal. The score calculation, pass/best-score preservation, modal, Retake, and Save & Exit flow remain unchanged.
+- Stateful assessment paths that do not contain an answer-revealing grading path must continue to validate as already safe; Scormify must not require unnecessary rewrites.
 
 ### Universal
 
@@ -137,6 +139,7 @@ Scormify deliberately uses sequential, deterministic processing:
 - Replace direct/selective resubmission with an explicit **Retake Assessment** gate.
 - Full retake clears all answers, feedback, correctness styling, old result UI, and saved `lastAnswers` before the new attempt.
 - Cross-profile hardening suppresses answer-revealing failed-final-assessment feedback while retaining the existing Universal retake/pass-preservation logic.
+- Universal Rule 40 must validate **executable retake behavior**, not stale comments/help text. A leftover non-executable phrase such as `Submit Again` must not fail a package when the actual submit control is hidden behind the explicit full-retake gate and no actionable direct-resubmit assignment remains.
 - Existing Universal `fetch('pages/...')` architecture is not rewritten unless Workday evidence shows it is necessary.
 
 ## Tester-derived regression requirements
@@ -147,6 +150,7 @@ The following real tester findings are now permanent regression cases conceptual
 - **Complex Projects 29 — Storage Facilities:** failed assessment allowed correction of only missed questions; explanatory feedback revealed answers before successful resubmission.
 - **Pipelines 102-20:** alternate assessment UI still allowed editing only failed responses.
 - **Electric Distribution 14:** failed assessment retained prior correct selections and allowed targeted correction.
+- **2026-09-15 mixed-era batch:** six SCORM 1.2 packages from multiple builder phases all reached the repair/validation stage but were blocked by two shared regressions. Universal outputs were false-failed by stale `Submit Again` prose even though the full-retake gate/reset was present; Stateful outputs still needed failed-final answer-feedback cleanup around their retained `gradeQuestion()` path. These cases are represented only by synthetic regressions in the public repository.
 
 Text/content defects reported in those courses (truncated sentences, typos, questionable answer wording) are **content-review issues**, not automatic SCORM runtime repairs.
 
@@ -177,6 +181,7 @@ bun run test
 bunx tsx test-retake-threshold.ts
 bunx tsx test-universal-pass-preservation.ts
 bunx tsx test-cross-profile-integrity.ts
+bunx tsx test-batch-regression.ts
 bun run build
 ```
 
@@ -187,6 +192,7 @@ Important suites:
 - `test-retake-threshold.ts` — retake cleanup and threshold resolution.
 - `test-universal-pass-preservation.ts` — Universal 79/80/pass-preservation/full-retake behavior.
 - `test-cross-profile-integrity.ts` — cross-profile Exit Course, full retake, failed-feedback protection, Stateful non-regression, unknown/vendor no-rewrite.
+- `test-batch-regression.ts` — mixed-era batch regression guard: Universal stale-prose false positives and Stateful failed-final answer-feedback cleanup, while preserving historical score/pass/modal/Save & Exit behavior.
 
 GitHub Actions must run these suites before deployment.
 
@@ -197,7 +203,7 @@ Before changing Scormify:
 1. Read this README and the relevant transformer/validator files.
 2. Make changes on the active development branch; do not merge to `main` without explicit approval.
 3. Prefer **additive composition** over replacing existing working functions.
-4. Do not loosen a validator merely to make a package pass.
+4. Do not loosen a validator merely to make a package pass; distinguish a true unsafe runtime from a validator false positive and add a regression for the exact behavior.
 5. Do not silently transform an unknown/vendor runtime.
 6. Never use real corporate SCORM content as a committed regression fixture.
 7. Add or extend a synthetic regression for every newly discovered production behavior.
