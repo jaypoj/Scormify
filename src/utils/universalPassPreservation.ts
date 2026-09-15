@@ -140,7 +140,8 @@ function hasUnsafeDirectResubmit(body: string): boolean {
   const actionableSubmitAgain = /submitButton\.(?:textContent|innerText|innerHTML)\s*=\s*['"]Submit Again['"]/i.test(body);
   if (actionableSubmitAgain) return true;
 
-  const hasExplicitGate = body.includes(SHOW_RETAKE_MARKER);
+  const hasExplicitGate = body.includes(SHOW_RETAKE_MARKER) ||
+    /submitButton\.style\.display\s*=\s*['\"]none['\"][\s\S]{0,220}(?:window\.)?__scormifyShowFullRetake\s*\(\s*\)/i.test(body);
   if (hasExplicitGate) return false;
 
   return /adjust your answers and submit again/i.test(body) ||

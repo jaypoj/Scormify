@@ -62,6 +62,23 @@ universalCode = universalCode.replace(
 const universalCheck = validateUniversalPassPreservation({ 'scripts/navigation.js': universalCode });
 assert(universalCheck.passed, `U-BATCH: Rule 40 still false-fails safe Universal output: ${universalCheck.details}`);
 
+
+// Real batch variant: helper gate is executable inside submitAssessment, while
+// the marker itself lives outside that function in the helper definition.
+const universalNoInlineMarkerRaw = universalRaw.replace(
+  "    // Never show retry button - we allow direct resubmission\n    if (retryButton) retryButton.style.display = 'none';\n",
+  "    console.log('legacy builder label: Submit Again');\n"
+);
+const universalNoInlineMarkerHardened = hardenUniversalAssessmentRuntime(universalNoInlineMarkerRaw);
+assert(universalNoInlineMarkerHardened.modified, 'U-BATCH-2: Universal hardener did not modify no-inline-marker variant');
+const universalNoInlineMarkerCheck = validateUniversalPassPreservation({
+  'scripts/navigation.js': universalNoInlineMarkerHardened.code,
+});
+assert(
+  universalNoInlineMarkerCheck.passed,
+  `U-BATCH-2: safe explicit helper gate still false-fails as direct resubmit: ${universalNoInlineMarkerCheck.details}`
+);
+
 const universalCross = analyzeCrossProfileWorkdayIntegrity(
   {
     'index.html': '<html><body><button onclick="exitCourse()">Exit Course</button><script>function exitCourse(){SCORM.set(\'cmi.core.exit\',\'suspend\');SCORM.commit();SCORM.finish();}</script></body></html>',
