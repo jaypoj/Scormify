@@ -183,13 +183,19 @@ function hasSafeFeedbackProtection(fileContents: Record<string, string>, profile
 
   if (profile === 'KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1') {
     const bodies = activeSubmitBodies(fileContents);
+    const baseSafe = bodies.length > 0 && bodies.every((body) =>
+      body.includes('ISSUE1_ASSESSMENT_PRESERVATION') && body.includes('showAssessmentModal')
+    );
+    if (!baseSafe) return false;
+
+    const hasPotentialAnswerLeak = bodies.some((body) => /gradeQuestion\s*\(/.test(body));
+    if (!hasPotentialAnswerLeak) return true;
+
     const helperPresent =
       combined.includes(FEEDBACK_PROTECTION_MARKER) &&
       combined.includes('function scormifyProtectStatefulFailedFinalAssessmentFeedback');
-    return helperPresent && bodies.length > 0 && bodies.every((body) =>
-      body.includes('ISSUE1_ASSESSMENT_PRESERVATION') &&
-      body.includes('showAssessmentModal') &&
-      body.includes('scormifyProtectStatefulFailedFinalAssessmentFeedback')
+    return helperPresent && bodies.every((body) =>
+      !/gradeQuestion\s*\(/.test(body) || body.includes('scormifyProtectStatefulFailedFinalAssessmentFeedback')
     );
   }
 
@@ -346,23 +352,18 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
 
   if (!repairedExisting) {
     if (/<\/header>/i.test(updated)) {
-      updated = updated.replace(/<\/header>/i, `${CANONICAL_EXIT_BUTTON}\
-</header>`);
+      updated = updated.replace(/<\/header>/i, `${CANONICAL_EXIT_BUTTON}\n</header>`);
     } else if (/<body\b[^>]*>/i.test(updated)) {
-      updated = updated.replace(/(<body\b[^>]*>)/i, `$1\
-<div style="position:fixed;top:10px;right:12px;z-index:2147483000;">${CANONICAL_EXIT_BUTTON}</div>`);
+      updated = updated.replace(/(<body\b[^>]*>)/i, `$1\n<div style="position:fixed;top:10px;right:12px;z-index:2147483000;">${CANONICAL_EXIT_BUTTON}</div>`);
     } else {
-      updated = `${CANONICAL_EXIT_BUTTON}\
-${updated}`;
+      updated = `${CANONICAL_EXIT_BUTTON}\n${updated}`;
     }
     changed = true;
   }
 
   if (!updated.includes(EXIT_MARKER)) {
-    if (/<\/body>/i.test(updated)) updated = updated.replace(/<\/body>/i, `${CANONICAL_EXIT_SCRIPT}\
-</body>`);
-    else updated += `\
-${CANONICAL_EXIT_SCRIPT}`;
+    if (/<\/body>/i.test(updated)) updated = updated.replace(/<\/body>/i, `${CANONICAL_EXIT_SCRIPT}\n</body>`);
+    else updated += `\n${CANONICAL_EXIT_SCRIPT}`;
     changed = true;
   }
 
@@ -522,10 +523,7 @@ function hardenKnownCompactFinalAssessment(code: string): { code: string; change
 `;
 
   let updated = code.slice(0, block.block.contentStart) + newBody + code.slice(block.block.contentEnd);
-  if (!updated.includes(FEEDBACK_PROTECTION_MARKER)) updated += `\
-\
-${COMPACT_ASSESSMENT_HELPERS}\
-`;
+  if (!updated.includes(FEEDBACK_PROTECTION_MARKER)) updated += `\n\n${COMPACT_ASSESSMENT_HELPERS}\n`;
 
   try {
     new Function(updated);
@@ -562,6 +560,7 @@ function hardenStatefulFailedFeedback(code: string): { code: string; changed: bo
   if (!code.includes('ISSUE1_ASSESSMENT_PRESERVATION') || !code.includes('showAssessmentModal')) {
     return { code, changed: false };
   }
+  if (!/gradeQuestion\s*\(/.test(code)) return { code, changed: false };
 
   const modalCall = "if (typeof showAssessmentModal === 'function') showAssessmentModal(__currentScore, __bestScore, __finalStatus);";
   if (!code.includes(modalCall)) return { code, changed: false };
