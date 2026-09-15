@@ -591,31 +591,45 @@ export async function patchSinglePackage(
   }
 
   // ADDITIVE CROSS-PROFILE WORKDAY HARDENING
-  // Runs after the historical profile-specific repair and before the unchanged-package
-  // stop. This preserves every existing repair while adding the common Exit Course,
-  // full-retake, and failed-final-assessment feedback invariants.
-  onStatusUpdate?.('Applying cross-profile Workday integrity checks...');
-  const crossProfileResult = hardenCrossProfileWorkdayPackage(
-    patchResult.updatedContents,
-    pkg.repairProfile,
-    primaryNested?.manifestData?.launchResource || pkg.manifestData?.launchResource
-  );
-  patchResult.updatedContents = crossProfileResult.updatedContents;
-  for (const f of crossProfileResult.filesModified) {
-    if (!patchResult.filesModified.includes(f)) patchResult.filesModified.push(f);
+  // Preserve the historical zero-modification stop: if a test/manual caller forces a
+  // profile onto a package that neither matched a historical pattern nor had a detected
+  // cross-profile defect, do not manufacture a modification. Normal scanned packages
+  // with Exit/retake/feedback findings are still repaired even if those are their only defects.
+  const detectedCross = primaryNested?.crossProfileWorkdayFindings || pkg.crossProfileWorkdayFindings;
+  const hasDetectedCrossProfileDefect = Boolean(detectedCross && (
+    detectedCross.exitControl === 'MISSING' ||
+    detectedCross.exitHandler === 'MISSING_OR_UNSAFE' ||
+    detectedCross.exitWiring === 'MISSING_OR_BROKEN' ||
+    detectedCross.assessmentRetake === 'UNSAFE' ||
+    detectedCross.assessmentFeedbackProtection === 'UNSAFE'
+  ));
+  const shouldApplyCrossProfileHardening = patchResult.filesModified.length > 0 || hasDetectedCrossProfileDefect;
+
+  let crossProfileResult: ReturnType<typeof hardenCrossProfileWorkdayPackage> | null = null;
+  if (shouldApplyCrossProfileHardening) {
+    onStatusUpdate?.('Applying cross-profile Workday integrity checks...');
+    crossProfileResult = hardenCrossProfileWorkdayPackage(
+      patchResult.updatedContents,
+      pkg.repairProfile,
+      primaryNested?.manifestData?.launchResource || pkg.manifestData?.launchResource
+    );
+    patchResult.updatedContents = crossProfileResult.updatedContents;
+    for (const f of crossProfileResult.filesModified) {
+      if (!patchResult.filesModified.includes(f)) patchResult.filesModified.push(f);
+    }
+    patchResult.codeChanges.push(...crossProfileResult.codeChanges);
+    patchResult.executionReport.patternAudits.push(...crossProfileResult.audits);
+    patchResult.executionReport.logs.push(...crossProfileResult.logs);
+    patchResult.executionReport.patternsSearchedCount += crossProfileResult.audits.length;
+    patchResult.executionReport.patternsMatchedCount += crossProfileResult.audits.filter((a) => a.matchFound).length;
+    patchResult.executionReport.replacementsAttemptedCount += crossProfileResult.audits.filter((a) => a.replacementApplied).length;
+    patchResult.executionReport.replacementsSuccessfullyAppliedCount += crossProfileResult.audits.filter((a) => a.replacementApplied).length;
+    patchResult.executionReport.exactFilesModified = [...patchResult.filesModified];
+    patchResult.executionReport.modifiedTextDiffers = patchResult.filesModified.some(
+      (f) => patchResult.updatedContents[f] !== fileContents[f]
+    );
+    if (patchResult.filesModified.length > 0) patchResult.executionReport.zeroModifiedExplanation = undefined;
   }
-  patchResult.codeChanges.push(...crossProfileResult.codeChanges);
-  patchResult.executionReport.patternAudits.push(...crossProfileResult.audits);
-  patchResult.executionReport.logs.push(...crossProfileResult.logs);
-  patchResult.executionReport.patternsSearchedCount += crossProfileResult.audits.length;
-  patchResult.executionReport.patternsMatchedCount += crossProfileResult.audits.filter((a) => a.matchFound).length;
-  patchResult.executionReport.replacementsAttemptedCount += crossProfileResult.audits.filter((a) => a.replacementApplied).length;
-  patchResult.executionReport.replacementsSuccessfullyAppliedCount += crossProfileResult.audits.filter((a) => a.replacementApplied).length;
-  patchResult.executionReport.exactFilesModified = [...patchResult.filesModified];
-  patchResult.executionReport.modifiedTextDiffers = patchResult.filesModified.some(
-    (f) => patchResult.updatedContents[f] !== fileContents[f]
-  );
-  if (patchResult.filesModified.length > 0) patchResult.executionReport.zeroModifiedExplanation = undefined;
 
   // REQUIREMENT 3: DO NOT VALIDATE AN UNCHANGED PACKAGE AS PATCHED
   // If Files Modified == 0, the app must stop and report:
@@ -675,12 +689,7 @@ export async function patchSinglePackage(
   // =========================================================================
   // HARD FINAL ASSERTION: FINAL FINISH COMPLETION INVARIANT
   // Immediately BEFORE generating the ZIP, scan the FINAL navigation.js.
-  // For KNOWN_SCORM12_STATEFUL_COMPACT_WORKDAY_V1:
-  // FAIL BUILD if the final-page branch contains any unconditional:
-  // cmi.core.lesson_status = completed
-  // or equivalent: SCORM.set(..., 'completed'), LMSSetValue(..., 'completed')
-  // Do not wait until normal post-fix validation.
-  // Treat this as a build-blocking invariant: FINAL FINISH COMPLETION INVARIANT
+  // FAIL BUILD if the final-page branch contains any unconditional completed write.
   // =========================================================================
   let hardFinishDefectDetected = false;
   let hardFinishDefectFile = 'scripts/navigation.js';
@@ -694,7 +703,6 @@ export async function patchSinglePackage(
     const content = patchResult.updatedContents[f];
     if (!content) continue;
 
-    // 1. Check nextPage block
     const nextPageBlock = findFunctionBlock(
       content,
       /(?:(?:var|let|const)\s+nextPage\s*=\s*function|function\s+nextPage|nextPage\s*:\s*function|nextPage\s*\([^)]*\)\s*\{)/i
@@ -712,7 +720,6 @@ export async function patchSinglePackage(
       }
     }
 
-    // 2. Check finish / onFinish blocks
     const finishBlock = findFunctionBlock(
       content,
       /(?:(?:var|let|const)\s+(?:finish|onFinish|finishCourse|handleFinish|completeCourse)\s*=\s*function|function\s+(?:finish|onFinish|finishCourse|handleFinish|completeCourse)|(?:finish|onFinish)\s*:\s*function)\s*\([^)]*\)\s*\{/i
@@ -730,7 +737,6 @@ export async function patchSinglePackage(
       }
     }
 
-    // 3. File-level check in navigation file for unconditional completed write
     if (f.toLowerCase().includes('nav')) {
       if (
         /(?:set|setValue|LMSSetValue)\s*\(\s*['"]cmi\.core\.lesson_status['"]\s*,\s*['"]completed['"]\s*\)/i.test(content)
@@ -770,7 +776,6 @@ export async function patchSinglePackage(
     };
   }
 
-  // Write modified files to the SCORM ZIP
   for (const filePath of patchResult.filesModified) {
     zip.file(filePath, patchResult.updatedContents[filePath]);
   }
@@ -795,7 +800,6 @@ export async function patchSinglePackage(
   const baseName = targetPackageName.replace(/\.zip$/i, '');
   const patchedFileName = `${baseName}_WORKDAY_FIXED.zip`;
 
-  // Post-patch defect re-scan
   onStatusUpdate?.('Re-scanning for defect neutralization...');
   const postScan = analyzeStatusWritesAndDefects(patchResult.updatedContents);
   const postWorkdayFindings = analyzeStatefulWorkdayFindings(patchResult.updatedContents);
@@ -805,7 +809,7 @@ export async function patchSinglePackage(
     (pkg.finishDefect.detected && postScan.finishDefect.detected) ||
     (pkg.relaunchDefect.detected && postScan.relaunchDefect.detected) ||
     (pkg.exitDefect.detected && postScan.exitDefect.detected) ||
-    postScan.finishDefect.detected; // Defect #2 must NEVER remain
+    postScan.finishDefect.detected;
 
   const statefulDefectsRemaining = postWorkdayFindings ? (
     postWorkdayFindings.globalStorageKey === 'DETECTED' ||
@@ -837,8 +841,6 @@ export async function patchSinglePackage(
     recreatedZipBlob: patchedBlob,
   });
 
-  // Visible cross-profile validation. These checks are deliberately appended to
-  // the existing validator output rather than replacing any historical rule.
   const crossProfileChecks = validateCrossProfileWorkdayIntegrity(
     patchResult.updatedContents,
     effectivePkg.repairProfile,
@@ -857,7 +859,6 @@ export async function patchSinglePackage(
     });
   }
 
-  // Add the passing invariant check
   validation.checks.push({
     id: 99,
     title: 'FINAL FINISH COMPLETION INVARIANT',
@@ -904,7 +905,7 @@ export async function patchSinglePackage(
     validationPassed,
     actionStatus: validationPassed ? 'PATCHED' : 'FAILED VALIDATION',
     patchExecutionReport: patchResult.executionReport,
-    crossProfileWorkdayFindings: crossProfileResult.after,
+    crossProfileWorkdayFindings: crossProfileResult?.after || pkg.crossProfileWorkdayFindings,
     error: validationPassed ? undefined : 'Validation failed after remediation attempt',
   };
 
