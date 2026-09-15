@@ -17,6 +17,7 @@ const RETRY_PATTERN = /(?:window\.)?retryAssessment\s*=\s*(?:async\s+)?function\
 
 const FULL_RETAKE_MARKER = 'SCORMIFY UNIVERSAL WORKDAY: full assessment retake reset';
 const SHOW_RETAKE_MARKER = 'SCORMIFY UNIVERSAL WORKDAY: explicit full-retake gate';
+const SHOW_RETAKE_HELPER_DEFINITION = 'window.__scormifyShowFullRetake = function';
 
 const SHOW_RETAKE_HELPER = `
 // ${SHOW_RETAKE_MARKER}
@@ -339,7 +340,7 @@ export function hardenUniversalAssessmentRuntime(originalCode: string): Universa
   }
 
   // Add the explicit retake-button helper only for the known direct-resubmission family.
-  if (originalUnsafeDirectResubmit && !code.includes(SHOW_RETAKE_MARKER)) {
+  if (originalUnsafeDirectResubmit && !code.includes(SHOW_RETAKE_HELPER_DEFINITION)) {
     const refreshedSubmit = findFunctionBlock(code, SUBMIT_PATTERN);
     if (refreshedSubmit) {
       code = code.slice(0, refreshedSubmit.block.end) + '\n' + SHOW_RETAKE_HELPER + code.slice(refreshedSubmit.block.end);
