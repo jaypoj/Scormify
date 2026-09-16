@@ -452,6 +452,28 @@ export function validateIssue1StatefulRuntime(updatedFilesMap: { [fileName: stri
   const labelPassed = labelSource.includes("status === 'passed'") && labelSource.includes("'% complete'") && labelSource.includes("'% viewed'");
   checks.push({ id: 43, title: 'Active progress label distinguishes viewed from complete', ruleName: 'Issue #1 Progress Label Runtime', file: 'scripts/navigation.js', passed: labelPassed, details: labelPassed ? 'PASS — non-passed learners see % viewed; passed learners see % complete' : 'FAIL — active progress path does not enforce viewed vs complete semantics' });
 
+  const saveExitBody = effectiveBody(nav, 'saveAndExitCourse');
+  const saveExitApplicable = saveExitBody.trim().length > 0;
+  const saveExitResumePassed = !saveExitApplicable || (
+    saveExitBody.includes('SCORMIFY STATEFUL WORKDAY: failed-assessment resume bookmark') &&
+    saveExitBody.includes('cmi.core.lesson_location') &&
+    saveExitBody.includes("cmi.core.exit', 'suspend'") &&
+    /typeof save\s*===\s*['"]function['"][\s\S]{0,120}save\s*\(\s*\)/.test(saveExitBody) &&
+    /commit\s*\(\s*\)/.test(saveExitBody) &&
+    /finish\s*\(\s*\)/.test(saveExitBody));
+  checks.push({
+    id: 45,
+    title: 'Failed-assessment Save & Exit preserves assessment resume bookmark',
+    ruleName: 'Issue #1 Failed Assessment Resume Runtime',
+    file: 'scripts/navigation.js',
+    passed: saveExitResumePassed,
+    details: !saveExitApplicable
+      ? 'PASS — low-level Stateful runtime contains no Save & Exit handler; the full navigation/cross-profile layer owns handler injection and resume validation'
+      : (saveExitResumePassed
+        ? 'PASS — failed-assessment Save & Exit persists Stateful progress, writes the assessment lesson_location bookmark, then suspends/commits/finishes'
+        : 'FAIL — failed-assessment Save & Exit can relaunch at an older lesson page instead of the final assessment'),
+  });
+
   const pageContentPresent = zipFileList.some((f) => f.toLowerCase() === 'scripts/page-content.js');
   const manifestRequired = pageContentPresent;
   const manifestPassed = !manifestRequired || /<file\b[^>]*href=['"]scripts\/page-content\.js['"]/i.test(manifest);

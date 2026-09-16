@@ -1610,19 +1610,69 @@ function showAssessmentModal(currentScore, bestScore, finalStatus) {
     modified = true;
   }
 
-  if (!code.includes('function saveAndExitCourse')) {
-    code += `\n\n/**
- * SAVE & EXIT CONTROL (Workday Remediation)
- * Commits progress with suspend exit and closes course window without manufacturing completed status.
- */
-function saveAndExitCourse() {
+  // Failed-final-assessment Save & Exit must checkpoint the assessment page before
+  // setting cmi.core.exit=suspend. Otherwise the LMS can correctly resume the SCO
+  // but the package reopens at an older bookmark and forces lesson knowledge checks again.
+  const statefulSaveExitBody = `
+  /* SCORMIFY STATEFUL WORKDAY: failed-assessment resume bookmark */
   if (typeof window !== 'undefined' && window._isExiting) return;
   if (typeof window !== 'undefined') window._isExiting = true;
 
-  if (typeof SCORM !== 'undefined') {
-    if (SCORM.set) SCORM.set('cmi.core.exit', 'suspend');
-    if (SCORM.commit) SCORM.commit();
-    if (SCORM.finish) SCORM.finish();
+  var __scormifyScorm = (typeof SCORM !== 'undefined' && SCORM)
+    ? SCORM
+    : ((typeof window !== 'undefined' && window.SCORM) ? window.SCORM : null);
+  var __scormifyStatus = '';
+  if (__scormifyScorm && typeof __scormifyScorm.get === 'function') {
+    try { __scormifyStatus = String(__scormifyScorm.get('cmi.core.lesson_status') || '').toLowerCase(); } catch (_) {}
+  }
+
+  var __scormifyResumePage = '';
+  try {
+    if (typeof currentPageId === 'function') {
+      __scormifyResumePage = String(currentPageId() || '');
+    }
+    if (!__scormifyResumePage && typeof currentPage !== 'undefined') {
+      if (typeof currentPage === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[currentPage]) {
+        var __scormifyCurrentEntry = PAGES[currentPage];
+        __scormifyResumePage = typeof __scormifyCurrentEntry === 'string'
+          ? __scormifyCurrentEntry
+          : String((__scormifyCurrentEntry && __scormifyCurrentEntry.id) || '');
+      } else if (typeof currentPage === 'string') {
+        __scormifyResumePage = currentPage;
+      }
+    }
+    if (!__scormifyResumePage && typeof current !== 'undefined' && typeof current === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[current]) {
+      var __scormifyIndexedEntry = PAGES[current];
+      __scormifyResumePage = typeof __scormifyIndexedEntry === 'string'
+        ? __scormifyIndexedEntry
+        : String((__scormifyIndexedEntry && __scormifyIndexedEntry.id) || '');
+    }
+    // This function is invoked by the failed final-assessment modal. If this older
+    // builder does not expose its current-page variable, the assessment is the final page.
+    if (!__scormifyResumePage && __scormifyStatus === 'failed' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES.length) {
+      var __scormifyFinalEntry = PAGES[PAGES.length - 1];
+      __scormifyResumePage = typeof __scormifyFinalEntry === 'string'
+        ? __scormifyFinalEntry
+        : String((__scormifyFinalEntry && __scormifyFinalEntry.id) || '');
+    }
+  } catch (_) {}
+
+  // Persist the complete Stateful payload first (visited pages, knowledge checks,
+  // audio gates, etc.), then explicitly overwrite the bookmark with the assessment page.
+  try {
+    if (typeof save === 'function') save();
+    else if (typeof saveProgress === 'function') saveProgress();
+  } catch (saveError) {
+    console.warn('[Scormify] Failed-assessment pre-exit save notice:', saveError);
+  }
+
+  if (__scormifyScorm) {
+    if (typeof __scormifyScorm.set === 'function') {
+      if (__scormifyResumePage) __scormifyScorm.set('cmi.core.lesson_location', __scormifyResumePage);
+      __scormifyScorm.set('cmi.core.exit', 'suspend');
+    }
+    if (typeof __scormifyScorm.commit === 'function') __scormifyScorm.commit();
+    if (typeof __scormifyScorm.finish === 'function') __scormifyScorm.finish();
   }
 
   try {
@@ -1633,12 +1683,33 @@ function saveAndExitCourse() {
     var exitMsgEl = document.getElementById('exit-notification') || document.createElement('div');
     exitMsgEl.id = 'exit-notification';
     exitMsgEl.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.85);color:#fff;display:flex;align-items:center;justify-content:center;z-index:999999;font-family:system-ui,-apple-system,sans-serif;padding:24px;text-align:center;';
-    exitMsgEl.innerHTML = '<div style="background:#1e293b;padding:24px 32px;border-radius:12px;border:1px solid #334155;max-width:440px;"><h3 style="margin:0 0 8px 0;font-size:18px;font-weight:600;">Course Progress Saved</h3><p style="margin:0;color:#94a3b8;font-size:14px;line-height:1.5;">Your progress has been saved. You may close this course window.</p></div>';
+    exitMsgEl.innerHTML = '<div style="background:#1e293b;padding:24px 32px;border-radius:12px;border:1px solid #334155;max-width:440px;"><h3 style="margin:0 0 8px 0;font-size:18px;font-weight:600;">Course Progress Saved</h3><p style="margin:0;color:#94a3b8;font-size:14px;line-height:1.5;">Your progress has been saved. Reopening the course will return you to the assessment.</p></div>';
     document.body.appendChild(exitMsgEl);
   }
-}
 `;
-    changes.push('Injected saveAndExitCourse function with cmi.core.exit = suspend and non-destructive close');
+
+  const saveExitPattern = /(?:(?:var|let|const)\\s+saveAndExitCourse\\s*=\\s*function|function\\s+saveAndExitCourse)\\s*\\([^)]*\\)\\s*\\{/i;
+  const saveExitBlock = findFunctionBlock(code, saveExitPattern);
+  if (saveExitBlock) {
+    if (!saveExitBlock.block.body.includes('SCORMIFY STATEFUL WORKDAY: failed-assessment resume bookmark')) {
+      code = code.slice(0, saveExitBlock.block.contentStart) + statefulSaveExitBody + code.slice(saveExitBlock.block.contentEnd);
+      changes.push('Hardened existing Save & Exit to persist Stateful progress and resume failed learners at the final assessment');
+      audits.push({
+        patternExpected: 'Save & Exit persists assessment bookmark before suspend/finish',
+        matchFound: true,
+        replacementApplied: true,
+      });
+      modified = true;
+    }
+  } else {
+    code += '\n\nfunction saveAndExitCourse() {' + statefulSaveExitBody + '\n}\n';
+    changes.push('Injected Save & Exit with failed-assessment resume bookmark, suspend exit, and non-destructive close');
+    audits.push({
+      patternExpected: 'Save & Exit persists assessment bookmark before suspend/finish',
+      matchFound: false,
+      replacementApplied: true,
+      reason: 'Canonical Save & Exit injected because the package had no handler',
+    });
     modified = true;
   }
 

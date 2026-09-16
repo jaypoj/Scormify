@@ -56,7 +56,9 @@ assert(compactHtml.includes('scormify-exit-course'), 'C1: Exit Course control wa
 assert(compactHtml.includes("cmi.core.exit', 'suspend'"), 'C1: exit handler does not set cmi.core.exit=suspend');
 assert(compactHtml.includes('adapter.commit()'), 'C1: exit handler does not commit');
 assert(compactHtml.includes('adapter.finish()'), 'C1: exit handler does not finish the SCORM session');
-assert(!/scormifyExitCourse[\s\S]*?cmi\.core\.lesson_status[\s\S]*?(?:passed|failed|completed)/i.test(compactHtml), 'C1: exit handler mutates lesson_status');
+assert(compactHtml.includes('SCORMIFY CROSS-PROFILE WORKDAY: failed-assessment resume bookmark'), 'C1: failed-assessment resume bookmark marker missing');
+assert(compactHtml.includes('cmi.core.lesson_location'), 'C1: exit handler does not preserve lesson_location');
+assert(!/scormifyExitCourse[\s\S]*?(?:set|setValue|LMSSetValue)\s*\(\s*['"]cmi\.core\.lesson_status['"]/i.test(compactHtml), 'C1: exit handler mutates lesson_status');
 assert(compactNav.includes('SCORMIFY CROSS-PROFILE WORKDAY: full final-assessment retake'), 'C1: full-retake marker missing');
 assert(compactNav.includes('SCORMIFY CROSS-PROFILE WORKDAY: failed-final-assessment feedback protected'), 'C1: failed-feedback protection marker missing');
 assert(compactNav.includes('Please answer every assessment question before submitting.'), 'C1: all-question answer gate missing');
@@ -126,6 +128,8 @@ assert(universalNav.includes('SCORMIFY UNIVERSAL WORKDAY: explicit full-retake g
 assert(universalNav.includes('SCORMIFY UNIVERSAL WORKDAY: full assessment retake reset'), 'U1: existing Universal full-retake reset was removed');
 assert(universalNav.includes('SCORMIFY CROSS-PROFILE WORKDAY: failed-final-assessment feedback protected'), 'U1: Universal feedback protection was not added');
 assert(analyzeCrossProfileWorkdayIntegrity(universalResult.updatedContents, universalProfile, 'index.html').assessmentFeedbackProtection === 'SAFE', 'U1: Universal feedback protection still validates unsafe');
+assert(universalResult.updatedContents['index.html'].includes('SCORMIFY CROSS-PROFILE WORKDAY: failed-assessment resume bookmark'), 'U1: Universal Exit Course was not upgraded with failed-assessment resume bookmarking');
+assert(validateCrossProfileWorkdayIntegrity(universalResult.updatedContents, universalProfile, 'index.html').every((c) => c.passed), 'U1: one or more cross-profile Universal validation rules failed');
 
 // ---------------------------------------------------------------------------
 // S1 — Stateful profile already has its approved modal/save/exit behavior.
@@ -134,7 +138,7 @@ assert(analyzeCrossProfileWorkdayIntegrity(universalResult.updatedContents, univ
 const statefulInput: Record<string, string> = {
   'index.html': `<!doctype html><html><body><header><button id="btn-save-exit" onclick="saveAndExitCourse()">Save &amp; Exit</button></header><script src="scripts/navigation.js"></script></body></html>`,
   'scripts/navigation.js': `
-function saveAndExitCourse(){ SCORM.set('cmi.core.exit','suspend'); SCORM.commit(); SCORM.finish(); }
+function saveAndExitCourse(){ /* SCORMIFY STATEFUL WORKDAY: failed-assessment resume bookmark */ if(typeof save==='function') save(); SCORM.set('cmi.core.lesson_location','assessment'); SCORM.set('cmi.core.exit','suspend'); SCORM.commit(); SCORM.finish(); }
 function submitQuiz(score){
   /* ISSUE1_ASSESSMENT_PRESERVATION */
   var bestScore = Math.max(0, score);
@@ -155,6 +159,21 @@ const statefulResult = hardenCrossProfileWorkdayPackage(statefulInput, statefulP
 assert(statefulResult.updatedContents['index.html'] === statefulInput['index.html'], 'S1: cross-profile layer unnecessarily rewrote working Stateful exit HTML');
 assert(statefulResult.updatedContents['scripts/navigation.js'] === statefulInput['scripts/navigation.js'], 'S1: cross-profile layer unnecessarily rewrote working Stateful navigation');
 
+// S2 — A legacy Stateful handler that suspends safely but does not preserve the
+// final-assessment bookmark must be upgraded instead of being treated as complete.
+const statefulLegacyExitInput: Record<string, string> = {
+  'index.html': `<!doctype html><html><body><header><button id="btn-save-exit" onclick="saveAndExitCourse()">Save &amp; Exit</button></header><script src="scripts/navigation.js"></script></body></html>`,
+  'scripts/navigation.js': `
+function saveAndExitCourse(){ SCORM.set('cmi.core.exit','suspend'); SCORM.commit(); SCORM.finish(); }
+function submitQuiz(score){ /* ISSUE1_ASSESSMENT_PRESERVATION */ showAssessmentModal(score, score, score >= 80 ? 'passed' : 'failed'); }
+function showAssessmentModal(){ var label='Retake Assessment'; var inputs=document.querySelectorAll('.assessment-card input[type="radio"]'); for(var i=0;i<inputs.length;i++) inputs[i].checked=false; }
+`,
+};
+const statefulLegacyExitResult = hardenCrossProfileWorkdayPackage(statefulLegacyExitInput, statefulProfile, 'index.html');
+assert(statefulLegacyExitResult.updatedContents['index.html'].includes('SCORMIFY CROSS-PROFILE WORKDAY: failed-assessment resume bookmark'), 'S2: legacy Stateful exit was not upgraded with a resume bookmark');
+assert(statefulLegacyExitResult.updatedContents['index.html'].includes('cmi.core.lesson_location'), 'S2: upgraded Stateful exit does not preserve lesson_location');
+assert(validateCrossProfileWorkdayIntegrity(statefulLegacyExitResult.updatedContents, statefulProfile, 'index.html').every((c) => c.passed), 'S2: upgraded Stateful legacy exit failed cross-profile validation');
+
 // N1 — Unknown/vendor profile is inspection-only: no deterministic rewrite.
 const vendorInput: Record<string, string> = {
   'index.html': '<html><body><div>Vendor player</div></body></html>',
@@ -169,4 +188,5 @@ console.log('- Compact missing/broken Exit Course is injected/rewired to suspend
 console.log('- Compact final assessment requires every answer, protects failed feedback, and starts retake fully blank');
 console.log('- Universal full-retake logic is preserved while failed-answer feedback leakage is suppressed');
 console.log('- Stateful working Save & Exit / modal behavior is recognized and left intact');
+console.log('- failed-assessment exits preserve lesson_location so relaunch can return to the quiz');
 console.log('- Unknown/vendor profiles remain inspection-only and are not rewritten');

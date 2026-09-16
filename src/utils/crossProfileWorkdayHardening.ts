@@ -14,6 +14,7 @@ const KNOWN_PROFILES: RepairProfile[] = [
 ];
 
 const EXIT_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: exit-course integrity';
+const EXIT_RESUME_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: failed-assessment resume bookmark';
 const COMPACT_RETAKE_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: full final-assessment retake';
 const FEEDBACK_PROTECTION_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: failed-final-assessment feedback protected';
 const UNIVERSAL_FULL_RETAKE_MARKER = 'SCORMIFY UNIVERSAL WORKDAY: full assessment retake reset';
@@ -106,7 +107,7 @@ function exitBodyIsSafe(body: string | null): boolean {
   const setsSuspend = /cmi\.core\.exit[\s\S]{0,180}['"]suspend['"]/i.test(body);
   const commits = /(?:\.commit\s*\(|LMSCommit\s*\()/i.test(body);
   const finishes = /(?:\.finish\s*\(|LMSFinish\s*\()/i.test(body);
-  const writesStatus = /(?:cmi\.core\.lesson_status|cmi\.completion_status|cmi\.success_status)[\s\S]{0,140}(?:completed|passed|failed)/i.test(body);
+  const writesStatus = /(?:set|setValue|LMSSetValue)\s*\(\s*['"](?:cmi\.core\.lesson_status|cmi\.completion_status|cmi\.success_status)['"]/i.test(body);
   return setsSuspend && commits && finishes && !writesStatus;
 }
 
@@ -116,6 +117,25 @@ function hasSafeExitHandler(fileContents: Record<string, string>): boolean {
     if (source.includes(EXIT_MARKER) && source.includes('scormifyExitCourse')) return true;
     const body = findExitFunctionBody(source);
     if (exitBodyIsSafe(body)) return true;
+  }
+  return false;
+}
+
+function exitBodyPreservesResumeBookmark(body: string | null): boolean {
+  if (!body) return false;
+  const writesBookmark = /(?:set|setValue|LMSSetValue)\s*\(\s*['"]cmi\.core\.lesson_location['"]/i.test(body);
+  const suspends = /(?:set|setValue|LMSSetValue)\s*\(\s*['"]cmi\.core\.exit['"][\s\S]{0,100}['"]suspend['"]/i.test(body);
+  const commits = /(?:\.commit\s*\(|LMSCommit\s*\()/i.test(body);
+  const finishes = /(?:\.finish\s*\(|LMSFinish\s*\()/i.test(body);
+  return writesBookmark && suspends && commits && finishes;
+}
+
+function hasAssessmentResumeBookmark(fileContents: Record<string, string>): boolean {
+  for (const source of Object.values(fileContents)) {
+    if (!source) continue;
+    if (source.includes(EXIT_RESUME_MARKER)) return true;
+    const body = findExitFunctionBody(source);
+    if (exitBodyPreservesResumeBookmark(body)) return true;
   }
   return false;
 }
@@ -252,6 +272,7 @@ const CANONICAL_EXIT_SCRIPT = `
   function getAdapter() {
     if (window.SafeSCORM && typeof window.SafeSCORM.setValue === 'function') {
       return {
+        get: function(k) { return typeof window.SafeSCORM.getValue === 'function' ? window.SafeSCORM.getValue(k) : ''; },
         set: function(k, v) { return window.SafeSCORM.setValue(k, v); },
         commit: function() { return typeof window.SafeSCORM.commit === 'function' ? window.SafeSCORM.commit() : true; },
         finish: function() { return typeof window.SafeSCORM.finish === 'function' ? window.SafeSCORM.finish() : true; }
@@ -259,6 +280,7 @@ const CANONICAL_EXIT_SCRIPT = `
     }
     if (window.SCORM && typeof window.SCORM.set === 'function') {
       return {
+        get: function(k) { return typeof window.SCORM['get'] === 'function' ? window.SCORM['get'](k) : ''; },
         set: function(k, v) { return window.SCORM.set(k, v); },
         commit: function() { return typeof window.SCORM.commit === 'function' ? window.SCORM.commit() : true; },
         finish: function() { return typeof window.SCORM.finish === 'function' ? window.SCORM.finish() : true; }
@@ -266,6 +288,7 @@ const CANONICAL_EXIT_SCRIPT = `
     }
     if (window.UniversalSCORM && typeof window.UniversalSCORM.setValue === 'function') {
       return {
+        get: function(k) { return typeof window.UniversalSCORM.getValue === 'function' ? window.UniversalSCORM.getValue(k) : ''; },
         set: function(k, v) { return window.UniversalSCORM.setValue(k, v); },
         commit: function() { return typeof window.UniversalSCORM.commit === 'function' ? window.UniversalSCORM.commit() : true; },
         finish: function() { return typeof window.UniversalSCORM.finish === 'function' ? window.UniversalSCORM.finish() : true; }
@@ -273,6 +296,7 @@ const CANONICAL_EXIT_SCRIPT = `
     }
     if (window.API && typeof window.API.LMSSetValue === 'function') {
       return {
+        get: function(k) { return typeof window.API.LMSGetValue === 'function' ? window.API.LMSGetValue(k) : ''; },
         set: function(k, v) { return window.API.LMSSetValue(k, String(v)); },
         commit: function() { return typeof window.API.LMSCommit === 'function' ? window.API.LMSCommit('') : true; },
         finish: function() { return typeof window.API.LMSFinish === 'function' ? window.API.LMSFinish('') : true; }
@@ -307,6 +331,32 @@ const CANONICAL_EXIT_SCRIPT = `
 
     var adapter = getAdapter();
     if (adapter) {
+      /* ${EXIT_RESUME_MARKER} */
+      var __scormifyStatus = '';
+      var __scormifyResumePage = '';
+      try { __scormifyStatus = String(adapter.get ? (adapter.get('cmi.core.lesson_status') || '') : '').toLowerCase(); } catch (_) {}
+      try {
+        if (typeof currentPageId === 'function') __scormifyResumePage = String(currentPageId() || '');
+        if (!__scormifyResumePage && typeof currentPage !== 'undefined') {
+          if (typeof currentPage === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[currentPage]) {
+            var __scormifyCurrentEntry = PAGES[currentPage];
+            __scormifyResumePage = typeof __scormifyCurrentEntry === 'string' ? __scormifyCurrentEntry : String((__scormifyCurrentEntry && __scormifyCurrentEntry.id) || '');
+          } else if (typeof currentPage === 'string') {
+            __scormifyResumePage = currentPage;
+          }
+        }
+        if (!__scormifyResumePage && typeof current !== 'undefined' && typeof current === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[current]) {
+          var __scormifyIndexedEntry = PAGES[current];
+          __scormifyResumePage = typeof __scormifyIndexedEntry === 'string' ? __scormifyIndexedEntry : String((__scormifyIndexedEntry && __scormifyIndexedEntry.id) || '');
+        }
+        if (!__scormifyResumePage && __scormifyStatus === 'failed' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES.length) {
+          var __scormifyFinalEntry = PAGES[PAGES.length - 1];
+          __scormifyResumePage = typeof __scormifyFinalEntry === 'string' ? __scormifyFinalEntry : String((__scormifyFinalEntry && __scormifyFinalEntry.id) || '');
+        }
+        if (!__scormifyResumePage && adapter.get) __scormifyResumePage = String(adapter.get('cmi.core.lesson_location') || '');
+      } catch (_) {}
+
+      try { if (__scormifyResumePage) adapter.set('cmi.core.lesson_location', __scormifyResumePage); } catch (_) {}
       try { adapter.set('cmi.core.exit', 'suspend'); } catch (_) {}
       try { adapter.commit(); } catch (_) {}
       try { adapter.finish(); } catch (_) {}
@@ -330,6 +380,12 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
   let updated = html;
   let changed = false;
   let repairedExisting = false;
+
+  const priorCanonicalExit = /<script\s+id=["']scormify-exit-integrity["'][^>]*>[\s\S]*?<\/script>/i;
+  if (priorCanonicalExit.test(updated) && !updated.includes(EXIT_RESUME_MARKER)) {
+    updated = updated.replace(priorCanonicalExit, CANONICAL_EXIT_SCRIPT.trim());
+    changed = true;
+  }
 
   const tagPattern = /<(button|a)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
   updated = updated.replace(tagPattern, (full, tagName: string, attrs: string, inner: string) => {
@@ -361,7 +417,7 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
     changed = true;
   }
 
-  if (!updated.includes(EXIT_MARKER)) {
+  if (!updated.includes(EXIT_RESUME_MARKER)) {
     if (/<\/body>/i.test(updated)) updated = updated.replace(/<\/body>/i, `${CANONICAL_EXIT_SCRIPT}\n</body>`);
     else updated += `\n${CANONICAL_EXIT_SCRIPT}`;
     changed = true;
@@ -639,10 +695,12 @@ export function hardenCrossProfileWorkdayPackage(
   }
 
   const launchHtmlPath = getLaunchHtmlPath(updatedContents, launchResource);
+  const resumeBookmarkNeeded = hasFinalAssessmentRuntime(updatedContents) && !hasAssessmentResumeBookmark(updatedContents);
   const exitNeedsRepair =
     before.exitControl === 'MISSING' ||
     before.exitHandler === 'MISSING_OR_UNSAFE' ||
-    before.exitWiring === 'MISSING_OR_BROKEN';
+    before.exitWiring === 'MISSING_OR_BROKEN' ||
+    resumeBookmarkNeeded;
 
   if (exitNeedsRepair && launchHtmlPath && updatedContents[launchHtmlPath]) {
     const original = updatedContents[launchHtmlPath];
@@ -777,6 +835,8 @@ export function validateCrossProfileWorkdayIntegrity(
     findings.exitWiring === 'WIRED';
   const retakePassed = findings.assessmentRetake !== 'UNSAFE';
   const feedbackPassed = findings.assessmentFeedbackProtection !== 'UNSAFE';
+  const resumeBookmarkApplicable = hasFinalAssessmentRuntime(updatedFilesMap);
+  const resumeBookmarkPassed = !resumeBookmarkApplicable || hasAssessmentResumeBookmark(updatedFilesMap);
 
   return [
     {
@@ -812,6 +872,18 @@ export function validateCrossProfileWorkdayIntegrity(
         : (feedbackPassed
           ? 'PASS — failed final-assessment answer feedback/correctness styling is suppressed before a new retake; lesson knowledge-check feedback remains untouched'
           : 'FAIL — failed final assessment may expose answer-revealing feedback or correctness styling before retake'),
+    },
+    {
+      id: 63,
+      title: 'Failed assessment exit preserves the assessment resume bookmark',
+      ruleName: 'Cross-profile Failed Assessment Resume Integrity',
+      file: getLaunchHtmlPath(updatedFilesMap, launchResource) || getNavigationCandidates(updatedFilesMap)[0] || 'index.html',
+      passed: resumeBookmarkPassed,
+      details: !resumeBookmarkApplicable
+        ? 'PASS — no scored final assessment detected; assessment-resume bookmark rule is not applicable'
+        : (resumeBookmarkPassed
+          ? 'PASS — exiting after a failed final assessment preserves/writes cmi.core.lesson_location before suspend/commit/finish so relaunch can return to the assessment'
+          : 'FAIL — failed-assessment exit can suspend without preserving the assessment bookmark, causing relaunch at an older lesson page'),
     },
   ];
 }
