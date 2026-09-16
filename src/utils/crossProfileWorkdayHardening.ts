@@ -15,6 +15,8 @@ const KNOWN_PROFILES: RepairProfile[] = [
 
 const EXIT_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: exit-course integrity';
 const EXIT_RESUME_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: failed-assessment resume bookmark';
+const EXIT_RUNTIME_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: verified save-exit lifecycle';
+const UNLOAD_GUARD_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: intentional-exit unload guard';
 const COMPACT_RETAKE_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: full final-assessment retake';
 const FEEDBACK_PROTECTION_MARKER = 'SCORMIFY CROSS-PROFILE WORKDAY: failed-final-assessment feedback protected';
 const UNIVERSAL_FULL_RETAKE_MARKER = 'SCORMIFY UNIVERSAL WORKDAY: full assessment retake reset';
@@ -114,7 +116,7 @@ function exitBodyIsSafe(body: string | null): boolean {
 function hasSafeExitHandler(fileContents: Record<string, string>): boolean {
   for (const source of Object.values(fileContents)) {
     if (!source) continue;
-    if (source.includes(EXIT_MARKER) && source.includes('scormifyExitCourse')) return true;
+    if (source.includes(EXIT_MARKER) && source.includes(EXIT_RUNTIME_MARKER) && source.includes('scormifyExitCourse')) return true;
     const body = findExitFunctionBody(source);
     if (exitBodyIsSafe(body)) return true;
   }
@@ -268,118 +270,164 @@ export function hasBlockingCrossProfileFinding(findings: CrossProfileWorkdayFind
 const CANONICAL_EXIT_SCRIPT = `
 <script id="scormify-exit-integrity">
 /* ${EXIT_MARKER} */
+/* ${EXIT_RUNTIME_MARKER} */
 (function() {
   function getAdapter() {
-    if (window.SafeSCORM && typeof window.SafeSCORM.setValue === 'function') {
+    if (window.SafeSCORM && typeof window.SafeSCORM.setValue === 'function' && typeof window.SafeSCORM.commit === 'function' && typeof window.SafeSCORM.finish === 'function') {
       return {
         get: function(k) { return typeof window.SafeSCORM.getValue === 'function' ? window.SafeSCORM.getValue(k) : ''; },
         set: function(k, v) { return window.SafeSCORM.setValue(k, v); },
-        commit: function() { return typeof window.SafeSCORM.commit === 'function' ? window.SafeSCORM.commit() : true; },
-        finish: function() { return typeof window.SafeSCORM.finish === 'function' ? window.SafeSCORM.finish() : true; }
+        commit: function() { return window.SafeSCORM.commit(); },
+        finish: function() { return window.SafeSCORM.finish(); }
       };
     }
-    if (window.SCORM && typeof window.SCORM.set === 'function') {
+    if (window.SCORM && typeof window.SCORM.set === 'function' && typeof window.SCORM.commit === 'function' && typeof window.SCORM.finish === 'function') {
       return {
         get: function(k) { return typeof window.SCORM['get'] === 'function' ? window.SCORM['get'](k) : ''; },
         set: function(k, v) { return window.SCORM.set(k, v); },
-        commit: function() { return typeof window.SCORM.commit === 'function' ? window.SCORM.commit() : true; },
-        finish: function() { return typeof window.SCORM.finish === 'function' ? window.SCORM.finish() : true; }
+        commit: function() { return window.SCORM.commit(); },
+        finish: function() { return window.SCORM.finish(); }
       };
     }
-    if (window.UniversalSCORM && typeof window.UniversalSCORM.setValue === 'function') {
+    if (window.UniversalSCORM && typeof window.UniversalSCORM.setValue === 'function' && typeof window.UniversalSCORM.commit === 'function' && typeof window.UniversalSCORM.finish === 'function') {
       return {
         get: function(k) { return typeof window.UniversalSCORM.getValue === 'function' ? window.UniversalSCORM.getValue(k) : ''; },
         set: function(k, v) { return window.UniversalSCORM.setValue(k, v); },
-        commit: function() { return typeof window.UniversalSCORM.commit === 'function' ? window.UniversalSCORM.commit() : true; },
-        finish: function() { return typeof window.UniversalSCORM.finish === 'function' ? window.UniversalSCORM.finish() : true; }
+        commit: function() { return window.UniversalSCORM.commit(); },
+        finish: function() { return window.UniversalSCORM.finish(); }
       };
     }
-    if (window.API && typeof window.API.LMSSetValue === 'function') {
+    if (window.API && typeof window.API.LMSSetValue === 'function' && typeof window.API.LMSCommit === 'function' && typeof window.API.LMSFinish === 'function') {
       return {
         get: function(k) { return typeof window.API.LMSGetValue === 'function' ? window.API.LMSGetValue(k) : ''; },
         set: function(k, v) { return window.API.LMSSetValue(k, String(v)); },
-        commit: function() { return typeof window.API.LMSCommit === 'function' ? window.API.LMSCommit('') : true; },
-        finish: function() { return typeof window.API.LMSFinish === 'function' ? window.API.LMSFinish('') : true; }
+        commit: function() { return window.API.LMSCommit(''); },
+        finish: function() { return window.API.LMSFinish(''); }
       };
     }
     return null;
   }
 
-  function showExitFallback() {
-    if (!document || !document.body) return;
+  function showExitMessage(title, message, isError) {
+    if (typeof document === 'undefined' || !document.body) return;
     var existing = document.getElementById('scormify-exit-saved-message');
-    if (existing) return;
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
     var overlay = document.createElement('div');
     overlay.id = 'scormify-exit-saved-message';
-    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('role', isError ? 'alert' : 'status');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.88);z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,-apple-system,sans-serif;text-align:center;color:#fff;';
-    overlay.innerHTML = '<div style="max-width:480px;background:#1e293b;border:1px solid #475569;border-radius:12px;padding:24px 28px;"><h2 style="font-size:20px;margin:0 0 8px;">Course Progress Saved</h2><p style="margin:0;color:#cbd5e1;line-height:1.5;">Your course session has been saved and closed with the LMS. If this window does not close automatically, use Workday\'s close control to return to Learning.</p></div>';
+    overlay.innerHTML = '<div style="max-width:520px;background:#1e293b;border:1px solid #475569;border-radius:12px;padding:24px 28px;"><h2 style="font-size:20px;margin:0 0 8px;">' + title + '</h2><p style="margin:0;color:#cbd5e1;line-height:1.5;">' + message + '</p></div>';
     document.body.appendChild(overlay);
+  }
+
+  function failExit(message) {
+    window.__scormifyExitInProgress = false;
+    window.__scormifySuppressUnloadPrompt = false;
+    window.__scormifySessionTerminated = false;
+    try { console.error('[Scormify] Save & Exit failed:', message); } catch (_) {}
+    showExitMessage('Unable to Exit Safely', 'Your course remains open because Scormify could not confirm that Workday saved and closed the SCORM session. Please keep this window open and try Save & Exit again.', true);
+    return false;
+  }
+
+  function resultFailed(value) {
+    return value === false || value === 'false';
   }
 
   window.scormifyExitCourse = function(event) {
     if (event && typeof event.preventDefault === 'function') event.preventDefault();
     if (window.__scormifyExitInProgress) return false;
     window.__scormifyExitInProgress = true;
+    window.__scormifySuppressUnloadPrompt = true;
+    window.__scormifySessionTerminated = false;
 
     try {
       if (typeof window.saveProgress === 'function') window.saveProgress();
       else if (typeof window.save === 'function') window.save();
+      else if (typeof saveProgress === 'function') saveProgress();
+      else if (typeof save === 'function') save();
     } catch (saveError) {
-      console.warn('[Scormify] Pre-exit save notice:', saveError);
+      try { console.warn('[Scormify] Pre-exit save notice:', saveError); } catch (_) {}
     }
 
     var adapter = getAdapter();
-    if (adapter) {
-      /* ${EXIT_RESUME_MARKER} */
-      var __scormifyStatus = '';
-      var __scormifyResumePage = '';
-      try { __scormifyStatus = String(adapter.get ? (adapter.get('cmi.core.lesson_status') || '') : '').toLowerCase(); } catch (_) {}
-      try {
-        if (typeof currentPageId === 'function') __scormifyResumePage = String(currentPageId() || '');
-        if (!__scormifyResumePage && typeof currentPage !== 'undefined') {
-          if (typeof currentPage === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[currentPage]) {
-            var __scormifyCurrentEntry = PAGES[currentPage];
-            __scormifyResumePage = typeof __scormifyCurrentEntry === 'string' ? __scormifyCurrentEntry : String((__scormifyCurrentEntry && __scormifyCurrentEntry.id) || '');
-          } else if (typeof currentPage === 'string') {
-            __scormifyResumePage = currentPage;
-          }
-        }
-        if (!__scormifyResumePage && typeof current !== 'undefined' && typeof current === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[current]) {
-          var __scormifyIndexedEntry = PAGES[current];
-          __scormifyResumePage = typeof __scormifyIndexedEntry === 'string' ? __scormifyIndexedEntry : String((__scormifyIndexedEntry && __scormifyIndexedEntry.id) || '');
-        }
-        if (!__scormifyResumePage && __scormifyStatus === 'failed' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES.length) {
-          var __scormifyFinalEntry = PAGES[PAGES.length - 1];
-          __scormifyResumePage = typeof __scormifyFinalEntry === 'string' ? __scormifyFinalEntry : String((__scormifyFinalEntry && __scormifyFinalEntry.id) || '');
-        }
-        if (!__scormifyResumePage && adapter.get) __scormifyResumePage = String(adapter.get('cmi.core.lesson_location') || '');
-      } catch (_) {}
+    if (!adapter) return failExit('No usable SCORM 1.2 API adapter with set/commit/finish was available.');
 
-      try { if (__scormifyResumePage) adapter.set('cmi.core.lesson_location', __scormifyResumePage); } catch (_) {}
-      try { adapter.set('cmi.core.exit', 'suspend'); } catch (_) {}
-      try { adapter.commit(); } catch (_) {}
-      try { adapter.finish(); } catch (_) {}
+    /* ${EXIT_RESUME_MARKER} */
+    var __scormifyStatus = '';
+    var __scormifyResumePage = '';
+    try { __scormifyStatus = String(adapter.get ? (adapter.get('cmi.core.lesson_status') || '') : '').toLowerCase(); } catch (_) {}
+    try {
+      if (typeof currentPageId === 'function') __scormifyResumePage = String(currentPageId() || '');
+      if (!__scormifyResumePage && typeof currentPage !== 'undefined') {
+        if (typeof currentPage === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[currentPage]) {
+          var __scormifyCurrentEntry = PAGES[currentPage];
+          __scormifyResumePage = typeof __scormifyCurrentEntry === 'string' ? __scormifyCurrentEntry : String((__scormifyCurrentEntry && __scormifyCurrentEntry.id) || '');
+        } else if (typeof currentPage === 'string') {
+          __scormifyResumePage = currentPage;
+        }
+      }
+      if (!__scormifyResumePage && typeof current !== 'undefined' && typeof current === 'number' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES[current]) {
+        var __scormifyIndexedEntry = PAGES[current];
+        __scormifyResumePage = typeof __scormifyIndexedEntry === 'string' ? __scormifyIndexedEntry : String((__scormifyIndexedEntry && __scormifyIndexedEntry.id) || '');
+      }
+      if (!__scormifyResumePage && __scormifyStatus === 'failed' && typeof PAGES !== 'undefined' && Array.isArray(PAGES) && PAGES.length) {
+        var __scormifyFinalEntry = PAGES[PAGES.length - 1];
+        __scormifyResumePage = typeof __scormifyFinalEntry === 'string' ? __scormifyFinalEntry : String((__scormifyFinalEntry && __scormifyFinalEntry.id) || '');
+      }
+      if (!__scormifyResumePage && adapter.get) __scormifyResumePage = String(adapter.get('cmi.core.lesson_location') || '');
+    } catch (_) {}
+
+    try {
+      if (__scormifyResumePage && resultFailed(adapter.set('cmi.core.lesson_location', __scormifyResumePage))) {
+        return failExit('The LMS rejected the resume bookmark.');
+      }
+    } catch (_) {
+      return failExit('The LMS threw an error while saving the resume bookmark.');
+    }
+
+    try {
+      if (resultFailed(adapter.set('cmi.core.exit', 'suspend'))) return failExit('The LMS rejected cmi.core.exit=suspend.');
+    } catch (_) {
+      return failExit('The LMS threw an error while setting cmi.core.exit=suspend.');
+    }
+
+    try {
+      if (resultFailed(adapter.commit())) return failExit('LMS Commit returned failure.');
+    } catch (_) {
+      return failExit('LMS Commit threw an error.');
+    }
+
+    try {
+      if (resultFailed(adapter.finish())) return failExit('LMS Finish returned failure.');
+    } catch (_) {
+      return failExit('LMS Finish threw an error.');
     }
 
     window.__scormifySessionTerminated = true;
+
     setTimeout(function() {
       try { window.close(); } catch (_) {}
       setTimeout(function() {
-        if (!window.closed) showExitFallback();
+        if (!window.closed) {
+          showExitMessage('Course Progress Saved', 'Your course progress was saved and the SCORM session was closed with Workday. If this window does not close automatically, use the Workday close control to return to Learning.', false);
+        }
       }, 250);
     }, 50);
     return false;
   };
+
+  window.scormifySaveAndExit = window.scormifyExitCourse;
+  window.saveAndExitCourse = function(event) { return window.scormifyExitCourse(event); };
+  window.exitCourse = function(event) { return window.scormifyExitCourse(event); };
 })();
 </script>`;
 
-const CANONICAL_EXIT_BUTTON = `<button id="scormify-exit-course" class="scormify-exit-course" type="button" onclick="return scormifyExitCourse(event)" aria-label="Exit Course" title="Exit Course" style="display:inline-flex;visibility:visible;opacity:1;align-items:center;gap:6px;flex-shrink:0;margin-left:auto;padding:7px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#ffffff;color:#334155;font:600 12px/1.2 system-ui,-apple-system,sans-serif;cursor:pointer;white-space:nowrap;">Exit Course</button>`;
+const CANONICAL_EXIT_BUTTON = `<button id="scormify-exit-course" class="scormify-exit-course" type="button" onclick="return scormifyExitCourse(event)" aria-label="Exit Course" title="Exit Course" style="display:inline-flex;visibility:visible;opacity:1;align-items:center;gap:6px;flex-shrink:0;margin-left:auto;padding:7px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#ffffff;color:#334155;font:600 12px/1.2 system-ui,-apple-system,sans-serif;cursor:pointer;white-space:nowrap;">Save &amp; Exit</button>`;
 
 function injectOrRepairExitHtml(html: string): { html: string; changed: boolean; description: string } {
   let updated = html;
   let changed = false;
-  let repairedExisting = false;
+  let repairedExistingCount = 0;
 
   const priorCanonicalExit = /<script\s+id=["']scormify-exit-integrity["'][^>]*>[\s\S]*?<\/script>/i;
   if (priorCanonicalExit.test(updated) && !updated.includes(EXIT_RESUME_MARKER)) {
@@ -389,8 +437,8 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
 
   const tagPattern = /<(button|a)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
   updated = updated.replace(tagPattern, (full, tagName: string, attrs: string, inner: string) => {
-    if (repairedExisting || !isExitLikeControl(`<${tagName}${attrs}>`, inner)) return full;
-    repairedExisting = true;
+    if (!isExitLikeControl(`<${tagName}${attrs}>`, inner)) return full;
+    repairedExistingCount += 1;
     let newAttrs = attrs.replace(/\s+onclick\s*=\s*(['"])[\s\S]*?\1/i, '');
     newAttrs = newAttrs.replace(/\s+disabled(?:\s*=\s*(['"])[^'"]*\1)?/i, '');
     if (/style\s*=\s*(['"])/i.test(newAttrs)) {
@@ -406,7 +454,7 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
     return `<${tagName}${newAttrs} onclick="return scormifyExitCourse(event)" data-scormify-exit-bound="true">${inner}</${tagName}>`;
   });
 
-  if (!repairedExisting) {
+  if (repairedExistingCount === 0) {
     if (/<\/header>/i.test(updated)) {
       updated = updated.replace(/<\/header>/i, `${CANONICAL_EXIT_BUTTON}\n</header>`);
     } else if (/<body\b[^>]*>/i.test(updated)) {
@@ -426,10 +474,44 @@ function injectOrRepairExitHtml(html: string): { html: string; changed: boolean;
   return {
     html: updated,
     changed,
-    description: repairedExisting
-      ? 'Rewired existing Exit Course control to the canonical Workday-safe exit handler'
-      : 'Injected persistent Exit Course control and canonical Workday-safe exit handler',
+    description: repairedExistingCount > 0
+      ? `Rewired ${repairedExistingCount} existing Exit Course / Save & Exit control(s) to the canonical Workday-safe exit handler`
+      : 'Injected persistent Save & Exit control and canonical Workday-safe exit handler',
   };
+}
+
+function guardIntentionalExitUnload(source: string): { source: string; changed: boolean } {
+  let updated = source;
+  let changed = false;
+  const guard = `\n    /* ${UNLOAD_GUARD_MARKER} */\n    if (typeof window !== 'undefined' && (window.__scormifyExitInProgress || window.__scormifySessionTerminated)) return;`;
+  const patterns = [
+    /((?:window\.)?addEventListener\s*\(\s*['"](?:beforeunload|unload|pagehide)['"]\s*,\s*function\s*\([^)]*\)\s*\{)/gi,
+    /((?:window\.)?addEventListener\s*\(\s*['"](?:beforeunload|unload|pagehide)['"]\s*,\s*\([^)]*\)\s*=>\s*\{)/gi,
+    /(window\.onbeforeunload\s*=\s*function\s*\([^)]*\)\s*\{)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    updated = updated.replace(pattern, (match) => {
+      const nearbyStart = Math.max(0, updated.indexOf(match));
+      const nearby = updated.slice(nearbyStart, nearbyStart + match.length + 220);
+      if (nearby.includes(UNLOAD_GUARD_MARKER)) return match;
+      changed = true;
+      return match + guard;
+    });
+  }
+
+  return { source: updated, changed };
+}
+
+function intentionalExitUnloadGuardsAreSafe(fileContents: Record<string, string>): boolean {
+  for (const [path, source] of Object.entries(fileContents)) {
+    if (!source || !/\.(?:js|html?|htm)$/i.test(path)) continue;
+    const hasPotentialConflict =
+      /(?:beforeunload|pagehide|['"]unload['"])/i.test(source) &&
+      /(?:preventDefault\s*\(|returnValue\s*=|\.finish\s*\(|LMSFinish\s*\()/i.test(source);
+    if (hasPotentialConflict && !source.includes(UNLOAD_GUARD_MARKER)) return false;
+  }
+  return true;
 }
 
 const COMPACT_ASSESSMENT_HELPERS = `
@@ -735,6 +817,33 @@ export function hardenCrossProfileWorkdayPackage(
     });
   }
 
+
+  // Canonical Save & Exit must not be blocked or double-finished by legacy unload handlers.
+  for (const filePath of Object.keys(updatedContents)) {
+    if (!/\.(?:js|html?|htm)$/i.test(filePath)) continue;
+    const original = updatedContents[filePath];
+    if (!original || !/(?:beforeunload|pagehide|['"]unload['"])/i.test(original)) continue;
+    const guarded = guardIntentionalExitUnload(original);
+    if (guarded.changed && guarded.source !== original) {
+      updatedContents[filePath] = guarded.source;
+      if (!filesModified.includes(filePath)) filesModified.push(filePath);
+      codeChanges.push({
+        filePath,
+        description: 'Guarded legacy unload/close logic so intentional Scormify Save & Exit is not blocked or double-finished',
+        beforeSnippet: original.slice(0, 300),
+        afterSnippet: guarded.source.slice(0, 300),
+      });
+      audits.push({
+        filePath,
+        patternExpected: 'legacy beforeunload/unload/pagehide handler bypasses itself during canonical Save & Exit',
+        matchFound: true,
+        replacementApplied: true,
+        contentChanged: true,
+      });
+      logs.push(`Canonical Save & Exit unload guard applied in ${filePath}`);
+    }
+  }
+
   const navCandidates = getNavigationCandidates(updatedContents);
   if (profile === 'KNOWN_SCORM12_COMPACT_QUIZ_80_V1') {
     for (const filePath of navCandidates) {
@@ -829,10 +938,12 @@ export function validateCrossProfileWorkdayIntegrity(
   if (!isKnownProfile(profile)) return [];
   const findings = analyzeCrossProfileWorkdayIntegrity(updatedFilesMap, profile, launchResource);
 
+  const unloadGuardsPassed = intentionalExitUnloadGuardsAreSafe(updatedFilesMap);
   const exitPassed =
     findings.exitControl === 'PRESENT' &&
     findings.exitHandler === 'SAFE' &&
-    findings.exitWiring === 'WIRED';
+    findings.exitWiring === 'WIRED' &&
+    unloadGuardsPassed;
   const retakePassed = findings.assessmentRetake !== 'UNSAFE';
   const feedbackPassed = findings.assessmentFeedbackProtection !== 'UNSAFE';
   const resumeBookmarkApplicable = hasFinalAssessmentRuntime(updatedFilesMap);
@@ -846,8 +957,8 @@ export function validateCrossProfileWorkdayIntegrity(
       file: getLaunchHtmlPath(updatedFilesMap, launchResource) || 'index.html',
       passed: exitPassed,
       details: exitPassed
-        ? 'PASS — visible Exit Course control is wired to a handler that sets cmi.core.exit=suspend, commits, finishes, preserves LMS status/score, and provides a close fallback'
-        : `FAIL — Exit Course integrity incomplete (control=${findings.exitControl}, handler=${findings.exitHandler}, wiring=${findings.exitWiring})`,
+        ? 'PASS — all recognized Exit Course / Save & Exit controls use the verified canonical lifecycle: save/bookmark, cmi.core.exit=suspend, checked commit, checked finish, intentional-unload guard, and close fallback'
+        : `FAIL — Exit Course integrity incomplete (control=${findings.exitControl}, handler=${findings.exitHandler}, wiring=${findings.exitWiring}, unloadGuards=${unloadGuardsPassed ? 'SAFE' : 'UNSAFE'})`,
     },
     {
       id: 61,

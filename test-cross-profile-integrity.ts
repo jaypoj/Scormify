@@ -86,6 +86,41 @@ assert(repairedExitHtml.includes('onclick="return scormifyExitCourse(event)"'), 
 assert((repairedExitHtml.match(/>Exit Course<\/button>/g) || []).length === 1, 'C2: existing Exit Course was duplicated instead of repaired');
 assert(validateCrossProfileWorkdayIntegrity(brokenExitResult.updatedContents, compactProfile, 'index.html')[0].passed, 'C2: rewired Exit Course did not pass integrity validation');
 
+
+// C3 — Multiple historical exit controls + legacy beforeunload confirmation must all
+// converge on the canonical handler, and the unload prompt must bypass intentional exit.
+const multiExitInput: Record<string, string> = {
+  'index.html': `<!doctype html><html><body><header>
+    <button id="exit-course" onclick="exitCourse()">Exit Course</button>
+    <button id="btn-save-exit" onclick="saveAndExitCourse()">Save &amp; Exit</button>
+  </header><script src="scripts/navigation.js"></script><script src="scripts/scorm-api.js"></script></body></html>`,
+  'scripts/navigation.js': `
+var COURSE_SETTINGS = { confirmExit: true };
+window.addEventListener('beforeunload', function(e) {
+  if (COURSE_SETTINGS.confirmExit) { e.preventDefault(); e.returnValue = 'Are you sure?'; return 'Are you sure?'; }
+});
+function exitCourse(){ if(window.UniversalSCORM){ UniversalSCORM.setValue('cmi.core.exit','suspend'); UniversalSCORM.commit(); UniversalSCORM.finish(); } }
+function saveAndExitCourse(){ exitCourse(); }
+`,
+  'scripts/scorm-api.js': `
+window.addEventListener('beforeunload', function() {
+  if (window.UniversalSCORM) { UniversalSCORM.commit(); UniversalSCORM.finish(); }
+});
+window.UniversalSCORM = window.UniversalSCORM || {};
+`,
+};
+const multiExitResult = hardenCrossProfileWorkdayPackage(multiExitInput, universalProfile, 'index.html');
+const multiExitHtml = multiExitResult.updatedContents['index.html'];
+const multiExitNav = multiExitResult.updatedContents['scripts/navigation.js'];
+const multiExitApi = multiExitResult.updatedContents['scripts/scorm-api.js'];
+assert((multiExitHtml.match(/onclick="return scormifyExitCourse\(event\)"/g) || []).length === 2, 'C3: every existing exit control was not canonicalized');
+assert(multiExitHtml.includes('verified save-exit lifecycle'), 'C3: verified lifecycle marker missing');
+assert(multiExitHtml.includes("resultFailed(adapter.commit())"), 'C3: canonical exit does not check Commit result');
+assert(multiExitHtml.includes("resultFailed(adapter.finish())"), 'C3: canonical exit does not check Finish result');
+assert(multiExitNav.includes('intentional-exit unload guard'), 'C3: legacy confirmation beforeunload was not guarded');
+assert(multiExitApi.includes('intentional-exit unload guard'), 'C3: legacy duplicate Finish beforeunload was not guarded');
+assert(validateCrossProfileWorkdayIntegrity(multiExitResult.updatedContents, universalProfile, 'index.html').every((c) => c.passed), 'C3: canonical multi-exit lifecycle failed validation');
+
 // ---------------------------------------------------------------------------
 // U1 — Universal builder era: preserve the existing Universal retake hardening
 // and add answer-feedback protection without replacing the profile logic.
