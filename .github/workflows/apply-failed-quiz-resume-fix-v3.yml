@@ -6,6 +6,7 @@ on:
       - fix/retake-and-legacy-universal
     paths:
       - tools/fix_failed_quiz_resume_v3.py
+      - tools/fix_failed_quiz_resume_v4.py
       - .github/workflows/apply-failed-quiz-resume-fix-v3.yml
 
 permissions:
@@ -30,6 +31,7 @@ jobs:
           python tools/apply_failed_quiz_resume_fix.py
           python tools/fix_failed_quiz_resume_v2.py
           python tools/fix_failed_quiz_resume_v3.py
+          python tools/fix_failed_quiz_resume_v4.py
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
