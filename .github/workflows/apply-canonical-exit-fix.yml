@@ -41,10 +41,12 @@ jobs:
       - name: Apply focused canonical Save & Exit patch
         run: python tools/apply_canonical_save_exit_fix.py
 
-      - name: Remove temporary patch machinery
+      - name: Keep workflow YAML out of Action-authored source commit
         run: |
+          git checkout HEAD -- .github/workflows/deploy-issue1-preview.yml
+          git checkout HEAD -- .github/workflows/retake-threshold-verify.yml
+          git checkout HEAD -- .github/workflows/apply-canonical-exit-fix.yml
           rm tools/apply_canonical_save_exit_fix.py
-          rm .github/workflows/apply-canonical-exit-fix.yml
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
