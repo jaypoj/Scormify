@@ -119,7 +119,23 @@ assert(passValidation.passed, passValidation.details);
 const fullRetakeValidation = validateUniversalFullRetakeReset({ 'scripts/navigation.js': transformed.code });
 assert(fullRetakeValidation.passed, fullRetakeValidation.details);
 
-function createRuntime(priorStatus: string, priorRawScore: string, correctCount: number) {
+
+// Historical Universal generation: failed attempts write SCORM 1.2 lesson_status directly
+// instead of using the newer version-aware SafeSCORM.setStatus helper.
+const legacyDirectFailedFixture = fixture.replace(
+  "SafeSCORM.setStatus({ success: 'failed' });",
+  "SafeSCORM.setValue('cmi.core.lesson_status', 'failed');\n    SafeSCORM.commit();"
+);
+const legacyDirectTransformed = hardenUniversalAssessmentRuntime(legacyDirectFailedFixture);
+assert(legacyDirectTransformed.modified, 'Expected legacy direct-failed-status fixture to be modified');
+assert(
+  legacyDirectTransformed.code.includes("SafeSCORM.setValue('cmi.core.lesson_status', 'passed')"),
+  'Legacy direct-failed-status repair did not add prior-pass preservation write'
+);
+const legacyDirectValidation = validateUniversalPassPreservation({ 'scripts/navigation.js': legacyDirectTransformed.code });
+assert(legacyDirectValidation.passed, `Legacy direct-failed-status Rule 40 regression: ${legacyDirectValidation.details}`);
+
+function createRuntime(priorStatus: string, priorRawScore: string, correctCount: number, codeUnderTest = transformed.code) {
   const store: Record<string, string> = {
     'cmi.core.lesson_status': priorStatus,
     'cmi.core.score.raw': priorRawScore,
@@ -129,6 +145,8 @@ function createRuntime(priorStatus: string, priorRawScore: string, correctCount:
 
   const SafeSCORM = {
     getValue(key: string) { return store[key] || ''; },
+    setValue(key: string, value: string) { store[key] = String(value); return true; },
+    commit() { return true; },
     setScore(score: number) {
       scoreWrites.push(score);
       store['cmi.core.score.raw'] = String(score);
@@ -230,7 +248,7 @@ function createRuntime(priorStatus: string, priorRawScore: string, correctCount:
   (globalThis as any).__SAFE_SCORM__ = SafeSCORM;
   (globalThis as any).__DOC__ = documentMock;
 
-  const factory = new Function('window', `${transformed.code}; return { submitAssessment: window.submitAssessment, retryAssessment: window.retryAssessment };`);
+  const factory = new Function('window', `${codeUnderTest}; return { submitAssessment: window.submitAssessment, retryAssessment: window.retryAssessment };`);
   const runtime = factory(windowMock);
 
   return {
@@ -277,6 +295,27 @@ assert(passedRuntime.store['cmi.core.lesson_status'] === 'passed', `Expected pri
 assert(passedRuntime.store['cmi.core.score.raw'] === '100', `Expected best score 100 to remain, got ${passedRuntime.store['cmi.core.score.raw']}`);
 assert(!passedRuntime.statusWrites.some((write) => write.completion === 'incomplete'), 'Prior passed learner was incorrectly reset to incomplete on retake');
 assert(passedRuntime.statusWrites.some((write) => write.success === 'passed'), 'Expected lower retake to preserve passed status');
+
+
+// Execute the exact older direct lesson_status failure shape: a fresh failed attempt must
+// still report failed, while a learner with an authoritative prior pass/best score stays passed.
+const legacyDirectFreshRuntime = createRuntime('', '0', 4, legacyDirectTransformed.code);
+await legacyDirectFreshRuntime.submitAssessment();
+assert(
+  legacyDirectFreshRuntime.store['cmi.core.lesson_status'] === 'failed',
+  `Legacy direct-failed-status fresh attempt should be failed, got ${legacyDirectFreshRuntime.store['cmi.core.lesson_status']}`
+);
+
+const legacyDirectPassedRuntime = createRuntime('passed', '100', 4, legacyDirectTransformed.code);
+await legacyDirectPassedRuntime.submitAssessment();
+assert(
+  legacyDirectPassedRuntime.store['cmi.core.lesson_status'] === 'passed',
+  `Legacy direct-failed-status lower retake downgraded prior pass to ${legacyDirectPassedRuntime.store['cmi.core.lesson_status']}`
+);
+assert(
+  legacyDirectPassedRuntime.store['cmi.core.score.raw'] === '100',
+  `Legacy direct-failed-status lower retake downgraded best score to ${legacyDirectPassedRuntime.store['cmi.core.score.raw']}`
+);
 
 // Older Universal packages with no retake/direct-resubmit state machine remain governed by historical rules only.
 const noRetakeValidation = validateUniversalFullRetakeReset({

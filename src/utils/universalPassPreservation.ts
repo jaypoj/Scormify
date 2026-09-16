@@ -307,20 +307,48 @@ export function hardenUniversalAssessmentRuntime(originalCode: string): Universa
     }
 
     // Historical Universal fix #4: a later lower retake cannot downgrade a prior pass.
-    const failStatusPattern = /SafeSCORM\.setStatus\s*\(\s*\{\s*success\s*:\s*['"]failed['"]\s*\}\s*\)\s*;/;
-    if (failStatusPattern.test(body) && !body.includes('SCORMIFY UNIVERSAL WORKDAY: preserve prior pass')) {
-      const replacement = `if (__scormifyPriorPassed || bestScore >= passingScore) {
+    // Two known Universal builder generations exist in production:
+    //   newer: SafeSCORM.setStatus({ success: 'failed' })
+    //   older: SafeSCORM.setValue('cmi.core.lesson_status', 'failed')
+    // Both must preserve an authoritative prior pass / best score.
+    const failSetStatusPattern = /(?:window\.)?SafeSCORM\.setStatus\s*\(\s*\{\s*success\s*:\s*['"]failed['"]\s*\}\s*\)\s*;/;
+    const failSetValuePattern = /(?:window\.)?SafeSCORM\.setValue\s*\(\s*['"]cmi\.core\.lesson_status['"]\s*,\s*['"]failed['"]\s*\)\s*;/;
+    const priorPassMarker = 'SCORMIFY UNIVERSAL WORKDAY: preserve prior pass';
+
+    if (!body.includes(priorPassMarker)) {
+      if (failSetStatusPattern.test(body)) {
+        const replacement = `if (__scormifyPriorPassed || bestScore >= passingScore) {
                     // SCORMIFY UNIVERSAL WORKDAY: preserve prior pass/best score after a lower retake
                     SafeSCORM.setStatus({ completion: 'completed', success: 'passed' });
                     console.log('[Scormify] Lower retake did not downgrade prior passing LMS status');
                 } else {
                     SafeSCORM.setStatus({ success: 'failed' });
                 }`;
-      body = body.replace(failStatusPattern, replacement);
-      changed = true;
-      changes.push('Guarded failed retake status so a prior/best passing result remains passed');
-      audits.push({ patternExpected: "SafeSCORM.setStatus({ success: 'failed' })", matchFound: true, replacementApplied: true });
-    } else if (body.includes('SCORMIFY UNIVERSAL WORKDAY: preserve prior pass')) {
+        body = body.replace(failSetStatusPattern, replacement);
+        changed = true;
+        changes.push('Guarded failed retake status so a prior/best passing result remains passed');
+        audits.push({ patternExpected: "SafeSCORM.setStatus({ success: 'failed' })", matchFound: true, replacementApplied: true });
+      } else if (failSetValuePattern.test(body)) {
+        const replacement = `if (__scormifyPriorPassed || bestScore >= passingScore) {
+                    // SCORMIFY UNIVERSAL WORKDAY: preserve prior pass/best score after a lower retake
+                    SafeSCORM.setValue('cmi.core.lesson_status', 'passed');
+                    console.log('[Scormify] Lower retake did not downgrade prior passing LMS status');
+                } else {
+                    SafeSCORM.setValue('cmi.core.lesson_status', 'failed');
+                }`;
+        body = body.replace(failSetValuePattern, replacement);
+        changed = true;
+        changes.push('Guarded legacy direct failed lesson_status write so a prior/best passing result remains passed');
+        audits.push({ patternExpected: "SafeSCORM.setValue('cmi.core.lesson_status', 'failed')", matchFound: true, replacementApplied: true });
+      } else {
+        audits.push({
+          patternExpected: 'known Universal failed-status write',
+          matchFound: false,
+          replacementApplied: false,
+          reason: 'No known SafeSCORM failed-status write shape found in submitAssessment',
+        });
+      }
+    } else {
       audits.push({ patternExpected: 'prior-pass preservation guard', matchFound: true, replacementApplied: false, reason: 'Already hardened' });
     }
   }
@@ -482,8 +510,12 @@ export function validateUniversalPassPreservation(
   const hasPriorStatus = body.includes("SafeSCORM.getValue('cmi.core.lesson_status')") && body.includes('__scormifyPriorPassed');
   const hasPriorScore = body.includes("SafeSCORM.getValue('cmi.core.score.raw')") && /Math\.max\([^)]*__scormifyPriorRawScore/.test(body);
   const resetGuarded = /attempts\s*>\s*1\s*&&\s*!__scormifyPriorPassed/.test(body);
-  const failGuarded = /__scormifyPriorPassed\s*\|\|\s*bestScore\s*>=\s*passingScore/.test(body) &&
-    body.includes("SafeSCORM.setStatus({ completion: 'completed', success: 'passed' })");
+  const hasPriorPassGuard = /__scormifyPriorPassed\s*\|\|\s*bestScore\s*>=\s*passingScore/.test(body) &&
+    body.includes('SCORMIFY UNIVERSAL WORKDAY: preserve prior pass');
+  const hasPreservedPassWrite =
+    body.includes("SafeSCORM.setStatus({ completion: 'completed', success: 'passed' })") ||
+    /(?:window\.)?SafeSCORM\.setValue\s*\(\s*['"]cmi\.core\.lesson_status['"]\s*,\s*['"]passed['"]\s*\)/.test(body);
+  const failGuarded = hasPriorPassGuard && hasPreservedPassWrite;
   const historicalPassPreserved = hasPriorStatus && hasPriorScore && resetGuarded && failGuarded;
 
   // Rule 40 is already wired into the main validator for Universal packages. Fold the
