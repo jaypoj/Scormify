@@ -45,6 +45,9 @@ jobs:
       - name: Cross-profile Workday integrity regression
         run: bunx tsx test-cross-profile-integrity.ts
 
+      - name: Canonical Save & Exit runtime regression
+        run: bunx tsx test-exit-runtime.ts
+
       - name: Mixed-era batch regression suite
         run: bunx tsx test-batch-regression.ts
 
