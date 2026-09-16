@@ -109,6 +109,30 @@ lms['cmi.core.lesson_status'] = 'passed';
 env.save();
 assert.equal(elements['progress-text'].textContent, '100% complete', 'passed learner should see 100% complete');
 
+// Rule 42 regression: some older Compact packages calculate progress only inside save().
+// The canonical authoritative save path is safe because it filters valid page IDs,
+// deduplicates visits, and clamps the final percentage to 0-100.
+const saveOnlyOriginal = `
+const PAGES=[{id:'page-1'},{id:'page-2'},{id:'assessment'}];
+const visited=new Set(['page-1','page-2','assessment','bogus-page']);
+function save(){
+  const progress=Math.round((visited.size/PAGES.length)*100);
+  return progress;
+}
+`;
+const saveOnlyHardened = hardenStatefulRuntimeCode(saveOnlyOriginal, 'save-only-progress');
+const saveOnlyRule42 = validateIssue1StatefulRuntime(
+  { 'scripts/navigation.js': saveOnlyHardened.code, 'imsmanifest.xml': '' },
+  ['scripts/navigation.js']
+).find((c) => c.id === 42);
+assert.equal(saveOnlyRule42?.passed, true, 'Rule 42 must recognize the canonical clamped save() path when getProgress/updateProgress are absent');
+
+const unsafeSaveOnlyRule42 = validateIssue1StatefulRuntime(
+  { 'scripts/navigation.js': saveOnlyOriginal, 'imsmanifest.xml': '' },
+  ['scripts/navigation.js']
+).find((c) => c.id === 42);
+assert.equal(unsafeSaveOnlyRule42?.passed, false, 'Rule 42 must still reject an unclamped legacy save()-only progress path');
+
 const manifest = `<?xml version="1.0"?><manifest><resources><resource identifier="r1" href="index.html"><file href="index.html"/></resource></resources></manifest>`;
 const manifestResult = ensurePageContentManifestEntry(manifest);
 assert.equal(manifestResult.modified, true);
@@ -139,6 +163,7 @@ assert.equal(integrity.passed, true, integrity.details);
 console.log('Issue #1 regression suite: PASS');
 console.log('- loadPage(0/1) renders bundled content');
 console.log('- progress cannot exceed 100%');
+console.log('- Rule 42 recognizes canonical save()-only progress hardening and rejects legacy unclamped save()');
 console.log('- LMS save performs zero browser-storage writes');
 console.log('- 79 fails, 80 passes, 100 then 40 preserves pass/best score');
 console.log('- failure path invokes assessment modal');

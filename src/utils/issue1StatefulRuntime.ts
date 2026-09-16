@@ -442,12 +442,13 @@ export function validateIssue1StatefulRuntime(updatedFilesMap: { [fileName: stri
 
   const progressBody = effectiveBody(nav, 'getProgress');
   const updateBody = effectiveBody(nav, 'updateProgress');
+  const effectiveSave = effectiveBody(nav, 'save');
   const hardenedGetProgress = progressBody.includes('ISSUE1_PROGRESS_CLAMP') && progressBody.includes('Math.min(100') && progressBody.includes('validIds') && progressBody.includes('seen');
   const hardenedUpdateProgress = updateBody.includes('ISSUE1_ACTIVE_PROGRESS_PATH') && updateBody.includes('Math.min(100') && updateBody.includes('validIds');
-  const progressPassed = hardenedGetProgress || hardenedUpdateProgress;
+  const hardenedSaveProgress = effectiveSave.includes('ISSUE1_AUTHORITATIVE_SAVE') && effectiveSave.includes('progress = Math.min(100') && effectiveSave.includes('validIds') && effectiveSave.includes('seen');
+  const progressPassed = hardenedGetProgress || hardenedUpdateProgress || hardenedSaveProgress;
   checks.push({ id: 42, title: 'Active progress calculation filters/deduplicates valid pages and clamps to 100%', ruleName: 'Issue #1 Progress Runtime', file: 'scripts/navigation.js', passed: progressPassed, details: progressPassed ? 'PASS — effective progress path filters invalid/duplicate IDs and clamps 0-100%' : 'FAIL — active progress path can exceed 100%' });
 
-  const effectiveSave = effectiveBody(nav, 'save');
   const labelSource = effectiveSave || updateBody;
   const labelPassed = labelSource.includes("status === 'passed'") && labelSource.includes("'% complete'") && labelSource.includes("'% viewed'");
   checks.push({ id: 43, title: 'Active progress label distinguishes viewed from complete', ruleName: 'Issue #1 Progress Label Runtime', file: 'scripts/navigation.js', passed: labelPassed, details: labelPassed ? 'PASS — non-passed learners see % viewed; passed learners see % complete' : 'FAIL — active progress path does not enforce viewed vs complete semantics' });
