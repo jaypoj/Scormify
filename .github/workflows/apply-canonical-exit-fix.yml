@@ -27,6 +27,17 @@ jobs:
         with:
           ref: fix/retake-and-legacy-universal
 
+      - name: Correct generated runtime message escaping
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/apply_canonical_save_exit_fix.py')
+          s = p.read_text()
+          s = s.replace("use Workday\\'s close control", "use the Workday close control")
+          s = s.replace("use Workday's close control", "use the Workday close control")
+          p.write_text(s)
+          PY
+
       - name: Apply focused canonical Save & Exit patch
         run: python tools/apply_canonical_save_exit_fix.py
 
